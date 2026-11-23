@@ -21,11 +21,6 @@ services:
       - "127.0.0.1:6334:6334"
     volumes:
       - campusai_qdrant:/qdrant/storage
-  clamav:
-    image: clamav/clamav:stable
-    profiles: ["security"]
-    ports:
-      - "127.0.0.1:3310:3310"
 
 volumes:
   campusai_postgres:
