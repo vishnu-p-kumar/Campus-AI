@@ -45,8 +45,11 @@ def validate_production_configuration(config=settings) -> None:
     reset_url = urlsplit(config.password_reset_url)
     if reset_url.scheme != "https" or not reset_url.netloc or reset_url.hostname in {"localhost", "127.0.0.1"}:
         raise RuntimeError("Production PASSWORD_RESET_URL must use a public HTTPS origin")
-    if config.document_uploads_enabled and (not config.upload_scan_required or not config.clamav_host):
-        raise RuntimeError("Production requires UPLOAD_SCAN_REQUIRED=true and a configured CLAMAV_HOST when document uploads are enabled")
+    if config.document_uploads_enabled:
+        if config.upload_scan_required and not config.clamav_host:
+            raise RuntimeError("UPLOAD_SCAN_REQUIRED=true requires a configured CLAMAV_HOST")
+        if not config.clamav_host and not config.allow_unscanned_uploads:
+            raise RuntimeError("Configure CLAMAV_HOST or explicitly set ALLOW_UNSCANNED_UPLOADS=true")
 
 
 validate_production_configuration()
@@ -134,14 +137,20 @@ def ready() -> dict[str, str]:
 
     if not settings.document_uploads_enabled:
         dependencies["upload_scanner"] = "disabled"
+        dependencies["document_uploads"] = "disabled"
     elif settings.clamav_host or settings.upload_scan_required:
         try:
             check_scanner()
             dependencies["upload_scanner"] = "connected"
+            dependencies["document_uploads"] = "enabled"
         except ScannerUnavailable:
-            dependencies.update(status="not_ready", upload_scanner="unavailable")
+            dependencies.update(status="not_ready", upload_scanner="unavailable", document_uploads="blocked")
+    elif settings.allow_unscanned_uploads:
+        dependencies["upload_scanner"] = "not_configured"
+        dependencies["document_uploads"] = "enabled_without_scanning"
     else:
         dependencies["upload_scanner"] = "not_configured"
+        dependencies["document_uploads"] = "blocked"
 
     if dependencies["status"] != "ready":
         raise HTTPException(status_code=503, detail=dependencies)
