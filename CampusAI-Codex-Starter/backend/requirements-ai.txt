@@ -1,0 +1,2 @@
+# Optional local embedding and cross-encoder models. Downloads large PyTorch/model files on first use.
+sentence-transformers>=3.3,<6.0
