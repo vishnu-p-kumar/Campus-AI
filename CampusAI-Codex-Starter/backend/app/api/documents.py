@@ -182,6 +182,11 @@ async def upload_document(
     actor: User = Depends(require_roles("placement_officer", "administrator")),
     db: Session = Depends(get_db),
 ):
+    if not settings.document_uploads_enabled:
+        raise HTTPException(
+            status_code=503,
+            detail="Document uploads are temporarily disabled until malware scanning is configured.",
+        )
     payload = await file.read(settings.max_upload_size + 1)
     try:
         ext = validate_document(file.filename or "", payload, settings.max_upload_size)
