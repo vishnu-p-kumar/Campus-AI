@@ -422,3 +422,25 @@ def test_document_version_chain_blocks_pending_and_only_supersedes_current(clien
                                data={"title": "Version chain", "category": "placement-policy", "supersedes_id": str(first.json()["id"])},
                                files={"file": ("policy.txt", b"Attempt to branch from an old version.", "text/plain")})
     assert stale_branch.status_code == 409
+
+def test_document_upload_is_disabled_until_malware_scanner_is_configured(client, db_session, monkeypatch, tmp_path):
+    from app.core.config import settings
+    from app.api import documents as documents_api
+
+    upload_directory = tmp_path / "uploads"
+    monkeypatch.setattr(settings, "document_uploads_enabled", False)
+    monkeypatch.setattr(settings, "upload_directory", str(upload_directory))
+    monkeypatch.setattr(
+        documents_api,
+        "scan_upload",
+        lambda _content: (_ for _ in ()).throw(AssertionError("scanner must not be bypassed")),
+    )
+    response = client.post(
+        "/api/v1/documents/upload",
+        headers=admin_headers(client, db_session),
+        data={"title": "Blocked upload", "category": "general"},
+        files={"file": ("policy.txt", b"Upload must remain disabled.", "text/plain")},
+    )
+    assert response.status_code == 503
+    assert "temporarily disabled" in response.json()["detail"]
+    assert not upload_directory.exists()
