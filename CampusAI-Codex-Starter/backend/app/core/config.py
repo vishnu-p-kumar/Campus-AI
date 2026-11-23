@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     clamav_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
     # Disable the upload endpoint until a malware scanner is available.
     document_uploads_enabled: bool = True
+    # Explicit opt-in for environments where uploads are accepted without malware scanning.
+    allow_unscanned_uploads: bool = False
     upload_scan_required: bool = False
     document_ingestion_mode: Literal["inline", "queued"] = "inline"
     ingestion_max_attempts: int = Field(default=3, ge=1, le=10)
