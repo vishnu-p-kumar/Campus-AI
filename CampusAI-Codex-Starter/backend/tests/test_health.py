@@ -28,7 +28,7 @@ def test_production_configuration_rejects_insecure_defaults():
         {"cors_origins": "http://campus.example.edu"},
         {"cors_origins": "https://campus.example.edu/admin"},
         {"password_reset_url": "http://campus.example.edu/reset-password"},
-        {"upload_scan_required": False},
+        {"upload_scan_required": False, "clamav_host": None},
         {"clamav_host": None},
         {"qdrant_url": None},
         {"qdrant_api_key": None},
@@ -116,3 +116,32 @@ def test_readiness_marks_upload_scanner_disabled_when_uploads_are_disabled(clien
     response = client.get("/health/ready")
     assert response.status_code == 200
     assert response.json()["upload_scanner"] == "disabled"
+
+def test_production_configuration_allows_explicit_unscanned_uploads():
+    config = Settings(
+        environment="production", jwt_secret_key="s" * 48,
+        database_url="postgresql+psycopg://campusai:secret@db.example/campusai",
+        cors_origins="https://campus.example.edu",
+        password_reset_url="https://campus.example.edu/reset-password",
+        document_uploads_enabled=True,
+        allow_unscanned_uploads=True,
+        upload_scan_required=False,
+        clamav_host=None,
+        qdrant_url="https://qdrant.example",
+        qdrant_api_key="qdrant-test-key",
+    )
+    validate_production_configuration(config)
+
+
+def test_readiness_reports_explicit_unscanned_upload_mode(client, monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "document_uploads_enabled", True)
+    monkeypatch.setattr(settings, "allow_unscanned_uploads", True)
+    monkeypatch.setattr(settings, "qdrant_url", None)
+    monkeypatch.setattr(settings, "clamav_host", None)
+    monkeypatch.setattr(settings, "upload_scan_required", False)
+    response = client.get("/health/ready")
+    assert response.status_code == 200
+    assert response.json()["upload_scanner"] == "not_configured"
+    assert response.json()["document_uploads"] == "enabled_without_scanning"
