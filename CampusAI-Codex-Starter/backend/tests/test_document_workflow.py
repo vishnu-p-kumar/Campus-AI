@@ -444,3 +444,26 @@ def test_document_upload_is_disabled_until_malware_scanner_is_configured(client,
     assert response.status_code == 503
     assert "temporarily disabled" in response.json()["detail"]
     assert not upload_directory.exists()
+
+def test_document_upload_can_run_without_scanner_only_with_explicit_opt_in(client, db_session, monkeypatch, tmp_path):
+    from app.api import documents as documents_api
+    from app.core.config import settings
+
+    upload_directory = tmp_path / "uploads"
+    monkeypatch.setattr(settings, "document_uploads_enabled", True)
+    monkeypatch.setattr(settings, "allow_unscanned_uploads", True)
+    monkeypatch.setattr(settings, "upload_scan_required", False)
+    monkeypatch.setattr(settings, "clamav_host", None)
+    monkeypatch.setattr(settings, "upload_directory", str(upload_directory))
+    monkeypatch.setattr(documents_api, "index_chunks", lambda chunks: len(chunks))
+    headers = admin_headers(client, db_session)
+
+    response = client.post(
+        "/api/v1/documents/upload",
+        headers=headers,
+        data={"title": "Unscanned test policy", "category": "general"},
+        files={"file": ("policy.txt", b"Applicants need a minimum CGPA of 7.5.", "text/plain")},
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["chunks_created"] > 0
+    assert upload_directory.exists()
