@@ -14,6 +14,8 @@ services:
         value: production
       - key: DOCUMENT_INGESTION_MODE
         value: inline
+      - key: DOCUMENT_UPLOADS_ENABLED
+        value: "false"
       - key: DATABASE_URL
         fromDatabase:
           name: campusai-db
@@ -44,10 +46,6 @@ services:
         value: /tmp/campusai-uploads
       - key: UPLOAD_SCAN_REQUIRED
         value: "true"
-      - key: CLAMAV_HOST
-        sync: false
-      - key: CLAMAV_PORT
-        value: "3310"
 
   - type: web
     name: campusai-frontend
