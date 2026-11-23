@@ -18,6 +18,7 @@ def test_document_approval_serializes_against_eligibility_application(monkeypatc
         Company,
         CompanyRequirement,
         Document,
+        DocumentChunk,
         PlacementDrive,
         ResumeAnalysis,
         StudentProfile,
@@ -40,7 +41,7 @@ def test_document_approval_serializes_against_eligibility_application(monkeypatc
     original_document_lock = documents._lock_document_scope
     original_application_lock = placement.lock_document_scope
 
-    for model in (User, StudentProfile, Company, Document, CompanyRequirement, PlacementDrive, Application, AuditLog, ResumeAnalysis):
+    for model in (User, StudentProfile, Company, Document, DocumentChunk, CompanyRequirement, PlacementDrive, Application, AuditLog, ResumeAnalysis):
         model.__table__.create(engine, checkfirst=True)
 
     try:
