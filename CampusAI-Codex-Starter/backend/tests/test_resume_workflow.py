@@ -64,6 +64,27 @@ def test_resume_upload_rejects_infected_content_before_analysis(client, monkeypa
     assert "malware scan" in response.json()["detail"]
 
 
+
+def test_resume_upload_is_disabled_when_deployment_has_no_scanner(client, monkeypatch):
+    from app.core.config import settings
+
+    register = client.post("/api/v1/auth/register", json={
+        "email": "disabled-upload@example.edu",
+        "full_name": "Resume User",
+        "password": "correct horse battery",
+    })
+    headers = {"Authorization": f"Bearer {register.json()['access_token']}"}
+    monkeypatch.setattr(settings, "file_uploads_enabled", False)
+    response = client.post(
+        "/api/v1/resumes/analyze",
+        headers=headers,
+        files={"file": ("resume.txt", b"private resume content", "text/plain")},
+    )
+    assert response.status_code == 503
+    assert "disabled" in response.json()["detail"]
+
+
+
 def test_resume_sections_use_grounded_structured_ai_extraction(client, monkeypatch):
     register = client.post("/api/v1/auth/register", json={"email": "resume-sections@example.edu", "full_name": "Resume User", "password": "correct horse battery"})
     headers = {"Authorization": f"Bearer {register.json()['access_token']}"}

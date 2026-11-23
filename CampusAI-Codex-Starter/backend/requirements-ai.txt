@@ -1,2 +1,3 @@
-# Optional local embedding and cross-encoder models. Downloads large PyTorch/model files on first use.
+# Optional semantic search. Not installed by the free deployment profile.
+qdrant-client>=1.12
 sentence-transformers>=3.3,<6.0

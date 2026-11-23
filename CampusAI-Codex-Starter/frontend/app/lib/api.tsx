@@ -3,7 +3,9 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
-const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000").replace(/\/$/, "");
+const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL ??
+  (process.env.NODE_ENV === "development" ? "http://127.0.0.1:8000" : "")).replace(/\/$/, "");
+export const FILE_UPLOADS_ENABLED = process.env.NEXT_PUBLIC_FILE_UPLOADS_ENABLED !== "false";
 
 async function fetchCampusApi(url: string, init?: RequestInit): Promise<Response> {
   try {

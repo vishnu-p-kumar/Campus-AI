@@ -50,6 +50,26 @@ def administrator_headers(client, db_session):
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
+
+def test_document_upload_is_disabled_when_deployment_has_no_scanner(client, db_session, monkeypatch, tmp_path):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "file_uploads_enabled", False)
+    upload_directory = tmp_path / "uploads"
+    monkeypatch.setattr(settings, "upload_directory", str(upload_directory))
+    headers = administrator_headers(client, db_session)
+    response = client.post(
+        "/api/v1/documents/upload",
+        headers=headers,
+        data={"title": "Test policy", "category": "placement-policy"},
+        files={"file": ("policy.txt", b"Do not process this file.", "text/plain")},
+    )
+    assert response.status_code == 503
+    assert "disabled" in response.json()["detail"]
+    assert not upload_directory.exists()
+
+
+
 def test_admin_manages_authorized_urls_and_url_context_switch(client, db_session, monkeypatch):
     from app.ai import gemini
     from app.core.config import settings

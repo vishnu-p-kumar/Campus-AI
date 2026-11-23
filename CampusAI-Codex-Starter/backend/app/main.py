@@ -33,8 +33,6 @@ def validate_production_configuration(config=settings) -> None:
         raise RuntimeError("Production requires a strong JWT_SECRET_KEY of at least 32 characters")
     if not config.database_url.startswith(("postgresql://", "postgresql+psycopg://", "postgresql+psycopg2://")):
         raise RuntimeError("Production requires PostgreSQL via DATABASE_URL")
-    if not config.qdrant_url or not config.qdrant_api_key:
-        raise RuntimeError("Production requires QDRANT_URL and QDRANT_API_KEY")
     origins = config.allowed_origins
     parsed_origins = [urlsplit(origin) for origin in origins]
     if not origins or "*" in origins or any(
@@ -45,8 +43,11 @@ def validate_production_configuration(config=settings) -> None:
     reset_url = urlsplit(config.password_reset_url)
     if reset_url.scheme != "https" or not reset_url.netloc or reset_url.hostname in {"localhost", "127.0.0.1"}:
         raise RuntimeError("Production PASSWORD_RESET_URL must use a public HTTPS origin")
-    if not config.upload_scan_required or not config.clamav_host:
-        raise RuntimeError("Production requires UPLOAD_SCAN_REQUIRED=true and a configured CLAMAV_HOST")
+    if config.file_uploads_enabled and (not config.upload_scan_required or not config.clamav_host):
+        raise RuntimeError(
+            "Production file uploads require UPLOAD_SCAN_REQUIRED=true and a configured CLAMAV_HOST; "
+            "otherwise set FILE_UPLOADS_ENABLED=false"
+        )
 
 
 validate_production_configuration()
@@ -132,7 +133,10 @@ def ready() -> dict[str, str]:
     else:
         dependencies["vector_store"] = "not_configured"
 
-    if settings.clamav_host or settings.upload_scan_required:
+    if not settings.file_uploads_enabled:
+        dependencies["file_uploads"] = "disabled"
+        dependencies["upload_scanner"] = "not_required"
+    elif settings.clamav_host or settings.upload_scan_required:
         try:
             check_scanner()
             dependencies["upload_scanner"] = "connected"

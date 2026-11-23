@@ -30,8 +30,6 @@ def test_production_configuration_rejects_insecure_defaults():
         {"password_reset_url": "http://campus.example.edu/reset-password"},
         {"upload_scan_required": False},
         {"clamav_host": None},
-        {"qdrant_url": None},
-        {"qdrant_api_key": None},
     ]
     for overrides in invalid_values:
         candidate = config.model_copy(update=overrides)
@@ -40,6 +38,20 @@ def test_production_configuration_rejects_insecure_defaults():
         except RuntimeError:
             continue
         raise AssertionError(f"Production config accepted unsafe values: {overrides}")
+
+
+
+def test_free_production_configuration_allows_bm25_and_disables_uploads():
+    config = Settings(
+        environment="production", jwt_secret_key="s" * 48,
+        database_url="postgresql+psycopg://campusai:secret@db.example/campusai",
+        cors_origins="https://campus.example.edu",
+        password_reset_url="https://campus.example.edu/reset-password",
+        file_uploads_enabled=False, upload_scan_required=False, clamav_host=None,
+        qdrant_url=None, qdrant_api_key=None,
+    )
+    validate_production_configuration(config)
+
 
 
 def test_development_configuration_keeps_local_defaults():
@@ -54,13 +66,15 @@ def test_readiness_reports_optional_vector_and_scanner_services(client, monkeypa
     monkeypatch.setattr(settings, "qdrant_url", None)
     monkeypatch.setattr(settings, "clamav_host", None)
     monkeypatch.setattr(settings, "upload_scan_required", False)
+    monkeypatch.setattr(settings, "file_uploads_enabled", False)
     response = client.get("/health/ready")
     assert response.status_code == 200
     assert response.json() == {
         "status": "ready",
         "database": "connected",
         "vector_store": "not_configured",
-        "upload_scanner": "not_configured",
+        "file_uploads": "disabled",
+        "upload_scanner": "not_required",
     }
 
 

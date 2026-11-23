@@ -180,6 +180,11 @@ async def compare_resume_with_role(
     ))
     if not resume:
         raise HTTPException(status_code=404, detail="Resume analysis not found")
+    if not settings.file_uploads_enabled and (resume_file is not None or role_file is not None):
+        raise HTTPException(
+            status_code=503,
+            detail="File uploads are disabled on this deployment until malware scanning is configured.",
+        )
     job_title = job_title.strip()
     if not job_title:
         raise HTTPException(status_code=422, detail="Enter a role title")

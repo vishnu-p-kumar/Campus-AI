@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     faithfulness_min_entailment: float = Field(default=0.70, ge=0, le=1)
     evidence_minimum_score: float = Field(default=0.35, ge=0, le=1)
     upload_directory: str = "./uploads"
+    file_uploads_enabled: bool = True
     max_upload_size: int = 10_000_000
     clamav_host: str | None = None
     clamav_port: int = Field(default=3310, ge=1, le=65535)
