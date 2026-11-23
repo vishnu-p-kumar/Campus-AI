@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { RequireAuth, useAuth } from "../lib/api";
 
 type Citation = { citation: number; source_type?: "document" | "web" | "company_record" | "application_record" | "drive_record"; document_id?: number; company_id?: number; title: string; filename?: string | null; version?: number; page?: number | null; section?: string | null; effective_date?: string | null; status?: string; url?: string };
-type Message = { role: "user" | "assistant"; content: string; citations?: Citation[] };
+type Message = { role: "user" | "assistant"; content: string; citations?: Citation[]; confidence?: number | null; confidence_label?: string | null; evidence_minimum_score?: number | null; citation_coverage?: number | null };
 
 function ChatContent() {
   const { api } = useAuth();
@@ -22,16 +22,16 @@ function ChatContent() {
     if (!question.trim() || busy) return;
     const current = question.trim(); setQuestion(""); setError(""); setMessages((items) => [...items, { role: "user", content: current }]); setBusy(true);
     try {
-      const response = await api<{ conversation_id: number; answer: string; citations: Citation[] }>("/api/v1/chat/", { method: "POST", body: JSON.stringify({ question: current, conversation_id: conversationId, language }) });
+      const response = await api<{ conversation_id: number; answer: string; citations: Citation[]; confidence: number; confidence_label: string; evidence_minimum_score: number; citation_coverage: number }>("/api/v1/chat/", { method: "POST", body: JSON.stringify({ question: current, conversation_id: conversationId, language }) });
       setConversationId(response.conversation_id);
-      setMessages((items) => [...items, { role: "assistant", content: response.answer, citations: response.citations }]);
+      setMessages((items) => [...items, { role: "assistant", content: response.answer, citations: response.citations, confidence: response.confidence, confidence_label: response.confidence_label, evidence_minimum_score: response.evidence_minimum_score, citation_coverage: response.citation_coverage }]);
       setHistory((items) => items.some((row) => row.id === response.conversation_id) ? items : [{ id: response.conversation_id, title: current }, ...items]);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Chat request failed"); }
     finally { setBusy(false); }
   }
   async function openConversation(id: number) {
     setError("");
-    try { const rows = await api<Array<{ role: "user" | "assistant"; content: string; citations: Citation[]; confidence: number }>>(`/api/v1/chat/conversations/${id}`); setConversationId(id); setMessages(rows); }
+    try { const rows = await api<Message[]>(`/api/v1/chat/conversations/${id}`); setConversationId(id); setMessages(rows); }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Could not load conversation"); }
   }
   async function deleteConversation(id: number) {
@@ -52,7 +52,7 @@ function ChatContent() {
       <label className="language-select">Answer language<select value={language} onChange={(e) => setLanguage(e.target.value)}><option value="en">English</option><option value="hi">हिन्दी</option><option value="kn">ಕನ್ನಡ</option></select></label>
     </div>
       <div className="chat-messages" aria-live="polite">{messages.length === 0 && <div className="empty-state"><strong>Try a placement question</strong><p>For example: “What CGPA is required for the current placement policy?”</p></div>}
-        {messages.map((message, index) => <article className={`chat-message message-${message.role}`} key={`${index}-${message.role}`}><strong>{message.role === "user" ? "You" : "CampusAI"}</strong><p>{message.content}</p>{message.citations?.length ? <div className="citation-list"><strong>Sources</strong>{message.citations.map((source) => <span key={`${source.url ?? source.document_id}-${source.citation}`}>[{source.citation}] {source.url ? <a href={source.url} target="_blank" rel="noreferrer">{source.title}</a> : <>{source.title}{source.filename && source.filename !== source.title ? ` · ${source.filename}` : ""}{source.version ? `, v${source.version}` : ""}{source.page ? `, p. ${source.page}` : ""}{source.section ? `, section: ${source.section}` : ""}{source.status === "superseded" ? " · historical version" : ""}</>}</span>)}</div> : null}</article>)}
+        {messages.map((message, index) => <article className={`chat-message message-${message.role}`} key={`${index}-${message.role}`}><strong>{message.role === "user" ? "You" : "CampusAI"}</strong><p>{message.content}</p>{message.role === "assistant" && typeof message.confidence === "number" && <div className="muted small-note evidence-metadata"><p>Heuristic evidence score: {message.confidence.toFixed(2)} (not a probability) · Citation coverage: {Math.round((message.citation_coverage ?? 0) * 100)}%</p>{typeof message.evidence_minimum_score === "number" && <p>Minimum cutoff: {message.evidence_minimum_score.toFixed(2)}</p>}</div>}{message.citations?.length ? <div className="citation-list"><strong>Sources</strong>{message.citations.map((source) => <span key={`${source.url ?? source.document_id}-${source.citation}`}>[{source.citation}] {source.url ? <a href={source.url} target="_blank" rel="noreferrer">{source.title}</a> : <>{source.title}{source.filename && source.filename !== source.title ? ` · ${source.filename}` : ""}{source.version ? `, v${source.version}` : ""}{source.page ? `, p. ${source.page}` : ""}{source.section ? `, section: ${source.section}` : ""}{source.status === "superseded" ? " · historical version" : ""}</>}</span>)}</div> : null}</article>)}
         {busy && <div className="loading-panel">Searching approved documents and preparing a cited response…</div>}
       </div>
       {error && <div className="notice notice-error">{error}</div>}

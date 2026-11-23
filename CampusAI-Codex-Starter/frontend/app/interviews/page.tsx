@@ -189,7 +189,7 @@ function InterviewsContent() {
             <div className="chat-message interview-qa-answer">
               <strong>Answer</strong>
               {!item.answer && <p role="status">{item.status === "pending" ? "Preparing your answer…" : "An answer could not be loaded. Your question is still here; you can try again below."}</p>}
-              {item.answer && <><h4>Answer</h4><p>{clean(item.answer.short_answer)}</p>
+              {item.answer && <><h4>Short answer</h4><p>{clean(item.answer.short_answer)}</p>
               <h4>Explanation</h4><p>{clean(item.answer.explanation)}</p>
               {(item.answer.key_points ?? []).length > 0 && <><h4>Key points</h4><ul>{item.answer.key_points.map((point, i) => <li key={i}>{clean(point)}</li>)}</ul></>}
               {item.answer.next_question && <div className="interview-next-question"><strong>Possible next interview question</strong><p>{clean(item.answer.next_question)}</p></div>}</>}

@@ -855,7 +855,26 @@ def conversation_history(conversation_id: int, user: User = Depends(require_role
     if not conversation or conversation.user_id != user.id:
         raise HTTPException(status_code=404, detail="Conversation not found")
     messages = db.scalars(select(ChatMessage).where(ChatMessage.conversation_id == conversation.id).order_by(ChatMessage.created_at)).all()
-    return [{"id": m.id, "role": m.role, "content": m.content, "citations": m.citations, "confidence": m.confidence, "created_at": m.created_at} for m in messages]
+    history = []
+    for message in messages:
+        citations = message.citations or []
+        valid_citations = {
+            int(item["citation"]) for item in citations
+            if isinstance(item, dict) and item.get("citation") is not None
+        }
+        is_answer = message.role == "assistant" and message.confidence is not None
+        history.append({
+            "id": message.id, "role": message.role, "content": message.content,
+            "citations": citations, "confidence": message.confidence,
+            "confidence_label": (
+                "supported" if is_answer and message.confidence >= settings.evidence_minimum_score
+                else "low_evidence" if is_answer else None
+            ),
+            "evidence_minimum_score": settings.evidence_minimum_score if is_answer else None,
+            "citation_coverage": verify_citation_coverage(message.content, valid_citations) if is_answer else None,
+            "created_at": message.created_at,
+        })
+    return history
 
 
 @router.delete("/conversations/{conversation_id}", status_code=204)

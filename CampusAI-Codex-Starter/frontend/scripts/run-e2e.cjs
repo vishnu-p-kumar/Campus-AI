@@ -149,6 +149,8 @@ async function main() {
     NEXT_DIST_DIR: path.basename(nextOutputDirectory),
     NEXT_TSCONFIG_PATH: path.basename(temporaryTsconfig),
     NEXT_PUBLIC_API_BASE_URL: "http://localhost:8100",
+    // Only the isolated E2E frontend exposes mocked upload controls; Render/Vercel keep them disabled.
+    NEXT_PUBLIC_FILE_UPLOADS_ENABLED: "true",
   });
   await Promise.all([waitFor("http://localhost:8100/health/ready", api, "API"), waitFor(webUrl, next, "Next.js")]);
 

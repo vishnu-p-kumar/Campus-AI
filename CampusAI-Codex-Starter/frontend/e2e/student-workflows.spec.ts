@@ -51,6 +51,7 @@ test("coding practice displays only a short code question and selectable choices
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill("e2e-safe-password-2026");
   await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page).toHaveURL(/\\/dashboard$/);
   await page.goto("/interviews");
   await page.route("**/api/v1/interviews/sessions", async (route) => {
     if (route.request().method() !== "POST") return route.continue();
@@ -81,7 +82,7 @@ test("student registers, completes multi-round practice, and sees private histor
   await expect(page).toHaveURL(/\/dashboard$/);
   await page.reload();
   await expect(page).toHaveURL(/\/dashboard$/);
-  await expect(page.getByText("E2E Practice Student", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Hello, E2E" })).toBeVisible();
 
   await page.goto("/interviews");
   await expect(page.getByRole("heading", { name: "Interview preparation" })).toBeVisible();
@@ -413,7 +414,7 @@ test("student can select and submit a multiple-choice interview answer", async (
   await page.getByLabel(/B\. GET/).check();
   await page.getByRole("button", { name: "Submit interview" }).click();
   await expect(page.getByRole("heading", { name: "Your answers and feedback" })).toBeVisible();
-  await expect(page.getByText("1/1", { exact: true })).toBeVisible();
+  await expect(page.locator(".score-display strong")).toHaveText("1/1");
   await expect(page.getByText("Correct answers", { exact: true })).toBeVisible();
   await expect(page.getByText("Correct answer: B. GET").first()).toBeVisible();
   await page.getByRole("row").filter({ hasText: "Backend developer" }).getByRole("button", { name: "View practice session 951" }).click();
@@ -533,21 +534,46 @@ test("placement administrator signs in and manages verified company records", as
 
 });
 
-test("student completes profile, checks published eligibility, and applies to a drive", async ({ page }) => {
+test("student profile is provisioned by an administrator before applying to a drive", async ({ page }) => {
   expect(e2eCompanyName).not.toBe("");
-  await page.goto("/register");
-  await page.getByLabel("Full name").fill("E2E Eligible Candidate");
-  await page.getByLabel("Email").fill(`eligible-${Date.now()}@example.edu`);
-  await page.getByLabel("Password").fill("e2e-safe-password-2026");
-  await page.getByRole("button", { name: "Create account" }).click();
-  await expect(page).toHaveURL(/\/dashboard$/);
+  const email = `eligible-${Date.now()}@example.edu`;
+  const password = "e2e-safe-password-2026";
 
-  await page.getByLabel("Branch").fill("Computer Science");
-  await page.getByLabel("Graduation year").fill("2027");
-  await page.getByLabel("CGPA (0–10)").fill("8.5");
-  await page.getByLabel("Active backlogs").fill("0");
-  await page.getByRole("button", { name: "Save academic profile" }).click();
-  await expect(page.getByRole("status")).toContainText("Profile saved");
+  // Student academic records are managed by administrators, not self-edited.
+  const adminContext = await page.context().browser()!.newContext({
+    baseURL: process.env.E2E_WEB_URL ?? "http://127.0.0.1:3100",
+  });
+  try {
+    const adminPage = await adminContext.newPage();
+    await adminPage.goto("/login");
+    await adminPage.getByLabel("Email").fill(process.env.E2E_STAFF_EMAIL ?? "");
+    await adminPage.getByLabel("Password").fill(process.env.E2E_STAFF_PASSWORD ?? "");
+    await adminPage.getByRole("button", { name: "Sign in" }).click();
+    await expect(adminPage).toHaveURL(/\\/admin$/);
+    await adminPage.goto("/admin/students");
+    await adminPage.getByRole("button", { name: "Add student" }).click();
+    await adminPage.getByLabel("Full name").fill("E2E Eligible Candidate");
+    await adminPage.getByLabel("Username / college email").fill(email);
+    await adminPage.getByLabel("Initial password").fill(password);
+    await adminPage.getByLabel("Student ID").fill(`ST-${Date.now()}`);
+    await adminPage.getByLabel("Department").fill("Engineering");
+    await adminPage.getByLabel("Branch").fill("Computer Science");
+    await adminPage.getByLabel("Graduation year").fill("2027");
+    await adminPage.getByLabel("CGPA").fill("8.5");
+    await adminPage.getByLabel("Semester").fill("6");
+    await adminPage.getByLabel("Active backlogs").fill("0");
+    await adminPage.getByLabel("Historical backlogs").fill("0");
+    await adminPage.getByRole("button", { name: "Create student account" }).click();
+    await expect(adminPage.getByRole("status")).toContainText("Student account created");
+  } finally {
+    await adminContext.close();
+  }
+
+  await page.goto("/login");
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill(password);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page).toHaveURL(/\\/dashboard$/);
 
   await page.goto("/companies");
   const companyCard = page.locator(".company-card").filter({ hasText: e2eCompanyName });
@@ -564,11 +590,11 @@ test("student completes profile, checks published eligibility, and applies to a 
   await page.getByLabel("Email").fill(process.env.E2E_STAFF_EMAIL ?? "");
   await page.getByLabel("Password").fill(process.env.E2E_STAFF_PASSWORD ?? "");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page).toHaveURL(/\/admin$/);
+  await expect(page).toHaveURL(/\\/admin$/);
   const registeredCompany = page.locator(".panel").filter({ has: page.getByRole("heading", { name: /Registered companies/ }) })
     .locator("li").filter({ hasText: e2eCompanyName });
   await registeredCompany.getByRole("link", { name: "View students" }).click();
-  await expect(page).toHaveURL(/\/admin\/companies\/\d+\/students$/);
+  await expect(page).toHaveURL(/\\/admin\\/companies\\/\\d+\\/students$/);
   await expect(page.getByRole("heading", { name: e2eCompanyName })).toBeVisible({ timeout: 15_000 });
   await expect(page.getByRole("row").filter({ hasText: "E2E Eligible Candidate" })).toContainText("Software Engineer");
   await page.getByRole("link", { name: "Back to admin dashboard" }).click();
