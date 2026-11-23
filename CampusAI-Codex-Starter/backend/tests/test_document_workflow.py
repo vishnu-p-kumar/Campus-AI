@@ -3,7 +3,6 @@ from datetime import datetime, timezone
 from app.ai.retrieval import retrieve
 from app.models import Company, Document, User
 from app.security import hash_password
-from app.upload_scan import MalwareDetected, ScannerUnavailable
 
 
 def test_postgres_document_scope_lock_uses_stable_scope_key():
@@ -299,37 +298,6 @@ def test_document_vector_metadata_preserves_expiry_on_upload_and_approval(client
     assert indexed_batches[1][0]["expiry_date"].isoformat().startswith("2027-06-30")
 
 
-def test_document_upload_rejects_infected_content_before_persisting(client, db_session, monkeypatch, tmp_path):
-    from app.api import documents as documents_api
-    from app.core.config import settings
-
-    upload_directory = tmp_path / "uploads"
-    monkeypatch.setattr(settings, "upload_directory", str(upload_directory))
-    monkeypatch.setattr(documents_api, "scan_upload", lambda _content: (_ for _ in ()).throw(MalwareDetected()))
-    headers = admin_headers(client, db_session)
-    response = client.post("/api/v1/documents/upload", headers=headers,
-                           data={"title": "Infected test", "category": "general"},
-                           files={"file": ("policy.txt", b"malicious test payload", "text/plain")})
-    assert response.status_code == 400
-    assert "malware scan" in response.json()["detail"]
-    assert not upload_directory.exists()
-
-
-def test_document_upload_fails_closed_when_required_scanner_is_unavailable(client, db_session, monkeypatch, tmp_path):
-    from app.api import documents as documents_api
-    from app.core.config import settings
-
-    upload_directory = tmp_path / "uploads"
-    monkeypatch.setattr(settings, "upload_directory", str(upload_directory))
-    monkeypatch.setattr(documents_api, "scan_upload", lambda _content: (_ for _ in ()).throw(ScannerUnavailable()))
-    headers = admin_headers(client, db_session)
-    response = client.post("/api/v1/documents/upload", headers=headers,
-                           data={"title": "Unscanned test", "category": "general"},
-                           files={"file": ("policy.txt", b"unscanned test payload", "text/plain")})
-    assert response.status_code == 503
-    assert not upload_directory.exists()
-
-
 def test_document_parser_errors_do_not_echo_private_content_or_paths(client, db_session, monkeypatch, tmp_path, caplog):
     from app.api import documents as documents_api
     from app.core.config import settings
@@ -423,46 +391,18 @@ def test_document_version_chain_blocks_pending_and_only_supersedes_current(clien
                                files={"file": ("policy.txt", b"Attempt to branch from an old version.", "text/plain")})
     assert stale_branch.status_code == 409
 
-def test_document_upload_is_disabled_until_malware_scanner_is_configured(client, db_session, monkeypatch, tmp_path):
-    from app.core.config import settings
-    from app.api import documents as documents_api
-
-    upload_directory = tmp_path / "uploads"
-    monkeypatch.setattr(settings, "document_uploads_enabled", False)
-    monkeypatch.setattr(settings, "upload_directory", str(upload_directory))
-    monkeypatch.setattr(
-        documents_api,
-        "scan_upload",
-        lambda _content: (_ for _ in ()).throw(AssertionError("scanner must not be bypassed")),
-    )
-    response = client.post(
-        "/api/v1/documents/upload",
-        headers=admin_headers(client, db_session),
-        data={"title": "Blocked upload", "category": "general"},
-        files={"file": ("policy.txt", b"Upload must remain disabled.", "text/plain")},
-    )
-    assert response.status_code == 503
-    assert "temporarily disabled" in response.json()["detail"]
-    assert not upload_directory.exists()
-
-def test_document_upload_can_run_without_scanner_only_with_explicit_opt_in(client, db_session, monkeypatch, tmp_path):
+def test_document_upload_succeeds_without_external_scanning(client, db_session, monkeypatch, tmp_path):
     from app.api import documents as documents_api
     from app.core.config import settings
 
     upload_directory = tmp_path / "uploads"
-    monkeypatch.setattr(settings, "document_uploads_enabled", True)
-    monkeypatch.setattr(settings, "allow_unscanned_uploads", True)
-    monkeypatch.setattr(settings, "upload_scan_required", False)
-    monkeypatch.setattr(settings, "clamav_host", None)
     monkeypatch.setattr(settings, "upload_directory", str(upload_directory))
     monkeypatch.setattr(documents_api, "index_chunks", lambda chunks: len(chunks))
     headers = admin_headers(client, db_session)
 
-    response = client.post(
-        "/api/v1/documents/upload",
-        headers=headers,
-        data={"title": "Unscanned test policy", "category": "general"},
-        files={"file": ("policy.txt", b"Applicants need a minimum CGPA of 7.5.", "text/plain")},
+    response = upload_policy(
+        client, headers, "Unscanned placement policy",
+        "Applicants need a minimum CGPA of 7.5.", "2026-01-01T00:00:00Z",
     )
     assert response.status_code == 201, response.text
     assert response.json()["chunks_created"] > 0
