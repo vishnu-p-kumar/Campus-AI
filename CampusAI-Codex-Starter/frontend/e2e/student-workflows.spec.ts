@@ -51,7 +51,7 @@ test("coding practice displays only a short code question and selectable choices
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill("e2e-safe-password-2026");
   await page.getByRole("button", { name: "Create account" }).click();
-  await expect(page).toHaveURL(/\\/dashboard$/);
+  await expect(page).toHaveURL(/\/dashboard$/);
   await page.goto("/interviews");
   await page.route("**/api/v1/interviews/sessions", async (route) => {
     if (route.request().method() !== "POST") return route.continue();
@@ -549,7 +549,7 @@ test("student profile is provisioned by an administrator before applying to a dr
     await adminPage.getByLabel("Email").fill(process.env.E2E_STAFF_EMAIL ?? "");
     await adminPage.getByLabel("Password").fill(process.env.E2E_STAFF_PASSWORD ?? "");
     await adminPage.getByRole("button", { name: "Sign in" }).click();
-    await expect(adminPage).toHaveURL(/\\/admin$/);
+    await expect(adminPage).toHaveURL(/\/admin$/);
     await adminPage.goto("/admin/students");
     await adminPage.getByRole("button", { name: "Add student" }).click();
     await adminPage.getByLabel("Full name").fill("E2E Eligible Candidate");
@@ -573,7 +573,7 @@ test("student profile is provisioned by an administrator before applying to a dr
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill(password);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page).toHaveURL(/\\/dashboard$/);
+  await expect(page).toHaveURL(/\/dashboard$/);
 
   await page.goto("/companies");
   const companyCard = page.locator(".company-card").filter({ hasText: e2eCompanyName });
@@ -590,11 +590,11 @@ test("student profile is provisioned by an administrator before applying to a dr
   await page.getByLabel("Email").fill(process.env.E2E_STAFF_EMAIL ?? "");
   await page.getByLabel("Password").fill(process.env.E2E_STAFF_PASSWORD ?? "");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page).toHaveURL(/\\/admin$/);
+  await expect(page).toHaveURL(/\/admin$/);
   const registeredCompany = page.locator(".panel").filter({ has: page.getByRole("heading", { name: /Registered companies/ }) })
     .locator("li").filter({ hasText: e2eCompanyName });
   await registeredCompany.getByRole("link", { name: "View students" }).click();
-  await expect(page).toHaveURL(/\\/admin\\/companies\\/\\d+\\/students$/);
+  await expect(page).toHaveURL(/\/admin\/companies\/\d+\/students$/);
   await expect(page.getByRole("heading", { name: e2eCompanyName })).toBeVisible({ timeout: 15_000 });
   await expect(page.getByRole("row").filter({ hasText: "E2E Eligible Candidate" })).toContainText("Software Engineer");
   await page.getByRole("link", { name: "Back to admin dashboard" }).click();
