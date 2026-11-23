@@ -44,7 +44,7 @@ Compare: A) Gemini-only baseline, B) basic RAG + Gemini, C) proposed confidence-
 - Keep secrets in environment variables and hosting secret stores.
 - Never expose Gemini or database credentials in frontend bundles.
 - Enforce per-user data access and role-based authorization.
-- Validate uploaded file type, size and content; provide malware scanning integration boundary.
+- Validate uploaded file type, size, and readable content before extracting document text. Antivirus scanning is not part of this deployment.
 - Avoid logging resumes, tokens or sensitive personal data.
 - Do not use protected characteristics to rank students or automate hiring decisions.
 - Provide deletion/retention controls and human review for sensitive decisions.
