@@ -41,14 +41,6 @@ class Settings(BaseSettings):
     evidence_minimum_score: float = Field(default=0.35, ge=0, le=1)
     upload_directory: str = "./uploads"
     max_upload_size: int = 10_000_000
-    clamav_host: str | None = None
-    clamav_port: int = Field(default=3310, ge=1, le=65535)
-    clamav_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
-    # Controls the document upload endpoint independently from malware scanning.
-    document_uploads_enabled: bool = True
-    # Explicit opt-in for environments where uploads are accepted without malware scanning.
-    allow_unscanned_uploads: bool = False
-    upload_scan_required: bool = False
     document_ingestion_mode: Literal["inline", "queued"] = "inline"
     ingestion_max_attempts: int = Field(default=3, ge=1, le=10)
     ingestion_worker_poll_seconds: float = Field(default=2.0, gt=0, le=60)
