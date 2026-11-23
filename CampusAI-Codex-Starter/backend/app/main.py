@@ -45,8 +45,8 @@ def validate_production_configuration(config=settings) -> None:
     reset_url = urlsplit(config.password_reset_url)
     if reset_url.scheme != "https" or not reset_url.netloc or reset_url.hostname in {"localhost", "127.0.0.1"}:
         raise RuntimeError("Production PASSWORD_RESET_URL must use a public HTTPS origin")
-    if not config.upload_scan_required or not config.clamav_host:
-        raise RuntimeError("Production requires UPLOAD_SCAN_REQUIRED=true and a configured CLAMAV_HOST")
+    if config.document_uploads_enabled and (not config.upload_scan_required or not config.clamav_host):
+        raise RuntimeError("Production requires UPLOAD_SCAN_REQUIRED=true and a configured CLAMAV_HOST when document uploads are enabled")
 
 
 validate_production_configuration()
@@ -132,7 +132,9 @@ def ready() -> dict[str, str]:
     else:
         dependencies["vector_store"] = "not_configured"
 
-    if settings.clamav_host or settings.upload_scan_required:
+    if not settings.document_uploads_enabled:
+        dependencies["upload_scanner"] = "disabled"
+    elif settings.clamav_host or settings.upload_scan_required:
         try:
             check_scanner()
             dependencies["upload_scanner"] = "connected"
