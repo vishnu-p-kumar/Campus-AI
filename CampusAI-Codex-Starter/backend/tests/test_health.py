@@ -89,3 +89,30 @@ def test_readiness_fails_when_required_scanner_is_unavailable(client, monkeypatc
     assert response.status_code == 503
     assert response.json()["detail"]["upload_scanner"] == "unavailable"
     assert "private scanner detail" not in response.text
+
+def test_production_configuration_allows_uploads_disabled_without_clamav():
+    config = Settings(
+        environment="production",
+        jwt_secret_key="s" * 48,
+        database_url="postgresql+psycopg://campusai:secret@db.example/campusai",
+        cors_origins="https://campus.example.edu",
+        password_reset_url="https://campus.example.edu/reset-password",
+        document_uploads_enabled=False,
+        upload_scan_required=True,
+        clamav_host=None,
+        qdrant_url="https://qdrant.example",
+        qdrant_api_key="qdrant-test-key",
+    )
+    validate_production_configuration(config)
+
+
+def test_readiness_marks_upload_scanner_disabled_when_uploads_are_disabled(client, monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "document_uploads_enabled", False)
+    monkeypatch.setattr(settings, "qdrant_url", None)
+    monkeypatch.setattr(settings, "clamav_host", None)
+    monkeypatch.setattr(settings, "upload_scan_required", True)
+    response = client.get("/health/ready")
+    assert response.status_code == 200
+    assert response.json()["upload_scanner"] == "disabled"
