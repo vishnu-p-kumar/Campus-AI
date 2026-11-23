@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     clamav_host: str | None = None
     clamav_port: int = Field(default=3310, ge=1, le=65535)
     clamav_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
-    # Disable the upload endpoint until a malware scanner is available.
+    # Controls the document upload endpoint independently from malware scanning.
     document_uploads_enabled: bool = True
     # Explicit opt-in for environments where uploads are accepted without malware scanning.
     allow_unscanned_uploads: bool = False
