@@ -20,7 +20,6 @@ from app.models import (AuditLog, AuthorizedSourceDomain, AuthorizedSourceUrl, C
                         DocumentIngestionJob, PlacementAssistantSetting, User)
 from app.schemas import AuthorizedUrlInput, PlacementWebSearchSettingInput
 from app.security import require_roles
-from app.upload_scan import MalwareDetected, ScannerUnavailable, scan_upload
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 logger = logging.getLogger(__name__)
@@ -182,22 +181,11 @@ async def upload_document(
     actor: User = Depends(require_roles("placement_officer", "administrator")),
     db: Session = Depends(get_db),
 ):
-    if not settings.document_uploads_enabled:
-        raise HTTPException(
-            status_code=503,
-            detail="Document uploads are temporarily disabled until malware scanning is configured.",
-        )
     payload = await file.read(settings.max_upload_size + 1)
     try:
         ext = validate_document(file.filename or "", payload, settings.max_upload_size)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    try:
-        scan_upload(payload)
-    except MalwareDetected as exc:
-        raise HTTPException(status_code=400, detail="The uploaded document failed the malware scan.") from exc
-    except ScannerUnavailable as exc:
-        raise HTTPException(status_code=503, detail="Upload scanning is temporarily unavailable.") from exc
     if category not in DOCUMENT_CATEGORIES:
         raise HTTPException(status_code=422, detail=f"Category must be one of: {', '.join(sorted(DOCUMENT_CATEGORIES))}")
     if effective_date and expiry_date and expiry_date < effective_date:
