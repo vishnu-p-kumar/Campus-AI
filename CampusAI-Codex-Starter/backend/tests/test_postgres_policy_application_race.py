@@ -19,6 +19,7 @@ def test_document_approval_serializes_against_eligibility_application(monkeypatc
         CompanyRequirement,
         Document,
         PlacementDrive,
+        ResumeAnalysis,
         StudentProfile,
         User,
     )
@@ -39,7 +40,7 @@ def test_document_approval_serializes_against_eligibility_application(monkeypatc
     original_document_lock = documents._lock_document_scope
     original_application_lock = placement.lock_document_scope
 
-    for model in (User, StudentProfile, Company, Document, CompanyRequirement, PlacementDrive, Application, AuditLog):
+    for model in (User, StudentProfile, Company, Document, CompanyRequirement, PlacementDrive, Application, AuditLog, ResumeAnalysis):
         model.__table__.create(engine, checkfirst=True)
 
     try:
@@ -58,6 +59,7 @@ def test_document_approval_serializes_against_eligibility_application(monkeypatc
                 historical_backlogs=0,
                 technical_skills=["Python"],
             ))
+            db.add(ResumeAnalysis(user_id=student.id, filename="resume.txt"))
             company = Company(name=company_name)
             db.add(company)
             db.flush()

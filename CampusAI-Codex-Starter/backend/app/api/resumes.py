@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 async def analyze_resume(file: UploadFile = File(...), job_title: str = Form(default=""),
                         job_description: str = Form(default=""), role_file: UploadFile | None = File(default=None),
                         user: User = Depends(require_roles("student")), db: Session = Depends(get_db)):
+    if not settings.file_uploads_enabled:
+        raise HTTPException(
+            status_code=503,
+            detail="Resume uploads are disabled on this deployment until malware scanning is configured.",
+        )
     data = await file.read(settings.max_upload_size + 1)
     try:
         validate_document(file.filename or "", data, settings.max_upload_size)
