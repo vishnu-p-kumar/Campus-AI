@@ -2,9 +2,9 @@ services:
   - type: web
     name: campusai-api
     runtime: python
-    rootDir: CampusAI-Codex-Starter
-    buildCommand: python -m pip install -r backend/requirements.txt -r backend/requirements-ai.txt && python -m alembic -c backend/alembic.ini upgrade head
-    startCommand: uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port $PORT
+    rootDir: .
+    buildCommand: python -m pip install -r CampusAI-Codex-Starter/backend/requirements.txt -r CampusAI-Codex-Starter/backend/requirements-ai.txt -r placement-query-bot-deploy/requirements.txt && python -m alembic -c CampusAI-Codex-Starter/backend/alembic.ini upgrade head
+    startCommand: uvicorn app.main:app --app-dir CampusAI-Codex-Starter/backend --host 0.0.0.0 --port $PORT
     healthCheckPath: /health/ready
     envVars:
       - key: PYTHON_VERSION
@@ -25,9 +25,21 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false
-      - key: GEMINI_PLACEMENT_API_KEY
-        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-3.5-flash-lite
+      - key: GEMINI_FALLBACK_MODELS
+        value: gemini-3.1-flash-lite
       - key: GEMINI_CHAT_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-120b
+      - key: JSONBIN_BIN_ID
+        sync: false
+      - key: JSONBIN_API_KEY
+        sync: false
+      - key: LOG_BIN_ID
         sync: false
       - key: QDRANT_URL
         sync: false
@@ -55,9 +67,9 @@ services:
   - type: worker
     name: campusai-ingestion-worker
     runtime: python
-    rootDir: CampusAI-Codex-Starter
-    buildCommand: python -m pip install -r backend/requirements.txt -r backend/requirements-ai.txt
-    startCommand: cd backend && python -m app.ingestion_worker
+    rootDir: .
+    buildCommand: python -m pip install -r CampusAI-Codex-Starter/backend/requirements.txt -r CampusAI-Codex-Starter/backend/requirements-ai.txt -r placement-query-bot-deploy/requirements.txt
+    startCommand: cd CampusAI-Codex-Starter/backend && python -m app.ingestion_worker
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.10

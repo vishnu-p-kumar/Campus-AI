@@ -1,4 +1,6 @@
 import pytest
+from sqlalchemy import select
+from app.models import InterviewResponse, InterviewSession, User
 
 from app.api import interviews as interviews_api
 
@@ -14,7 +16,7 @@ def register_student(client, email):
 def test_multiround_interview_persists_private_score_history_and_completion(client):
     student = register_student(client, "practice@example.edu")
     created = client.post("/api/v1/interviews/sessions", headers=student, json={
-        "category": "technical", "language": "en", "focus": "backend developer", "question_limit": 2,
+        "category": "technical", "language": "en", "focus": "backend developer", "question_type": "typed", "question_limit": 2,
     })
     assert created.status_code == 201
     session = created.json()
@@ -73,6 +75,44 @@ def test_interview_history_and_sessions_are_user_scoped(client):
     assert client.post(f"/api/v1/interviews/sessions/{session_id}/complete", headers=second).status_code == 404
 
 
+def test_interview_session_defaults_to_aptitude_multiple_choice(client, monkeypatch):
+    headers = register_student(client, "default-practice@example.edu")
+    monkeypatch.setattr(interviews_api, "generate_question", lambda *_args: {
+        "question": "What is three plus two?",
+        "choices": [{"id": "A", "text": "4"}, {"id": "B", "text": "5"},
+                    {"id": "C", "text": "6"}, {"id": "D", "text": "7"}],
+        "correct_option": "B",
+    })
+    created = client.post("/api/v1/interviews/sessions", headers=headers, json={})
+    assert created.status_code == 201, created.text
+    assert created.json()["category"] == "aptitude"
+    assert created.json()["question_type"] == "multiple_choice"
+    assert created.json()["generation_mode"] == "gemini"
+    assert len(created.json()["options"]) == 4
+
+
+def test_student_can_delete_one_practice_history_and_its_saved_answers(client, db_session):
+    owner_headers = register_student(client, "delete-practice@example.edu")
+    other_headers = register_student(client, "other-delete-practice@example.edu")
+    owner_user = db_session.scalar(select(User).where(User.email == "delete-practice@example.edu"))
+    first = InterviewSession(user_id=owner_user.id, category="technical", language="en", question_type="typed",
+                             question_limit=1, status="completed", score=4.0)
+    second = InterviewSession(user_id=owner_user.id, category="hr", language="en", question_type="typed",
+                              question_limit=1, status="active", current_question="Tell me about a project.")
+    db_session.add_all([first, second])
+    db_session.flush()
+    db_session.add(InterviewResponse(session_id=first.id, question="Explain an API.", answer="A saved answer.", feedback={}, score=4.0))
+    db_session.commit()
+    first_id, second_id = first.id, second.id
+
+    deleted = client.delete(f"/api/v1/interviews/history/{first_id}", headers=owner_headers)
+    assert deleted.status_code == 204
+    assert [item["id"] for item in client.get("/api/v1/interviews/history", headers=owner_headers).json()] == [second_id]
+    assert client.get(f"/api/v1/interviews/history/{first_id}", headers=owner_headers).status_code == 404
+    assert db_session.scalar(select(InterviewResponse.id).where(InterviewResponse.session_id == first_id)) is None
+    assert client.delete(f"/api/v1/interviews/history/{second_id}", headers=other_headers).status_code == 404
+
+
 def test_multiple_choice_session_generates_options_and_checks_selected_answer(client, monkeypatch):
     headers = register_student(client, "mcq-practice@example.edu")
     generated = {"question": "Which HTTP method retrieves a resource?", "choices": [
@@ -124,12 +164,35 @@ def test_coding_category_always_starts_multiple_choice_with_code_snippet(client,
     assert len(created.json()["options"]) == 4
 
 
-def test_multiple_choice_generation_requires_a_valid_gemini_question(client, monkeypatch):
+def test_multiple_choice_generation_uses_curated_fallback_for_a_five_question_session(client, monkeypatch):
     headers = register_student(client, "invalid-mcq@example.edu")
-    monkeypatch.setattr(interviews_api, "generate_question", lambda *_args: "open-ended question")
+    monkeypatch.setattr(interviews_api, "generate_question", lambda *_args: None)
     response = client.post("/api/v1/interviews/sessions", headers=headers,
-                           json={"category": "technical", "question_type": "multiple_choice"})
-    assert response.status_code == 503
+                           json={"category": "technical", "question_type": "multiple_choice", "question_limit": 5})
+    assert response.status_code == 201, response.text
+    session = response.json()
+    assert session["generation_mode"] == "curated-question-bank"
+    seen = set()
+    for index in range(5):
+        question = session["question"]
+        options = session["options"]
+        assert question not in seen
+        seen.add(question)
+        assert len(options) == 4
+        assert {option["id"] for option in options} == {"A", "B", "C", "D"}
+        assert "correct_option" not in session and "correct_answer" not in session
+        answered = client.post(f"/api/v1/interviews/sessions/{session['id']}/responses", headers=headers,
+                               json={"question": question, "answer": options[0]["id"]})
+        assert answered.status_code == 200, answered.text
+        if index < 4:
+            assert answered.json()["completed"] is False
+            assert answered.json()["generation_mode"] == "curated-question-bank"
+            session["question"] = answered.json()["question"]
+            session["options"] = answered.json()["options"]
+        else:
+            assert answered.json()["completed"] is True
+            assert answered.json()["answered_count"] == 5
+    assert len(seen) == 5
 
 
 def test_multiple_choice_scores_correct_as_one_and_wrong_as_zero(client, monkeypatch):
@@ -227,7 +290,7 @@ def test_interview_topic_plan_spans_category_topics(client, monkeypatch):
         return f"Discuss {topic} at {difficulty} level."
     monkeypatch.setattr(interviews_api, "generate_question", generate)
     created = client.post("/api/v1/interviews/sessions", headers=headers, json={
-        "category": "hr", "question_limit": 3,
+        "category": "hr", "question_type": "typed", "question_limit": 3,
     })
     session = created.json()
     response = client.post(f"/api/v1/interviews/sessions/{session['id']}/responses", headers=headers, json={
@@ -257,6 +320,27 @@ def test_interview_ask_endpoint_uses_gemini_answer(client, monkeypatch):
     assert observed == {"question": "Explain a hash table", "focus": "Backend engineer", "language": "en"}
 
 
+def test_interview_tutor_reports_gemini_overload_with_retry_hint(client, monkeypatch, caplog):
+    headers = register_student(client, "interview-tutor-overload@example.edu")
+
+    class ProviderUnavailable(RuntimeError):
+        code = 503
+
+    def fail(*_args):
+        raise ProviderUnavailable("private provider response must not be shown")
+
+    monkeypatch.setattr(interviews_api, "answer_interview_question", fail)
+    response = client.post("/api/v1/interviews/ask", headers=headers, json={
+        "question": "What is a REST API?", "language": "en",
+    })
+
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "15"
+    assert "temporarily overloaded or timed out" in response.json()["detail"]
+    assert "private provider response" not in response.text
+    assert "category=provider_server_error status_code=503" in caplog.text
+
+
 @pytest.mark.parametrize(("language", "answer", "expected_script"), [
     ("hi", "पहले मैंने उदाहरण से जाँचा क्योंकि परिणाम मापना जरूरी था। फिर टीम के लिए सीखा हुआ तरीका बताया।", "पहले"),
     ("kn", "ಮೊದಲು ಉದಾಹರಣೆಯಿಂದ ಪರೀಕ್ಷೆ ಮಾಡಿದೆ, ಏಕೆಂದರೆ ಫಲಿತಾಂಶ ಅಳೆಯುವುದು ಮುಖ್ಯ. ನಂತರ ತಂಡಕ್ಕೆ ಕಲಿತ ವಿಧಾನ ವಿವರಿಸಿದೆ.", "ಮೊದಲು"),
@@ -269,7 +353,7 @@ def test_multilingual_interview_fallback_localizes_questions_and_feedback(
     monkeypatch.setattr(interviews_api, "review_answer", lambda *_args: None)
 
     created = client.post("/api/v1/interviews/sessions", headers=headers,
-                          json={"category": "technical", "language": language, "question_limit": 1})
+                          json={"category": "technical", "language": language, "question_type": "typed", "question_limit": 1})
     assert created.status_code == 201
     session = created.json()
     assert expected_script in answer

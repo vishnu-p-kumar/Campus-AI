@@ -50,6 +50,26 @@ def test_retrieval_can_find_complete_chunk_by_original_filename(db_session):
     assert sources[0]["text"] == original_chunk
 
 
+def test_faculty_query_retrieves_professor_record_and_passes_evidence_gate(db_session):
+    admin = User(email="faculty-admin@example.edu", full_name="Admin", password_hash="x", role="administrator")
+    db_session.add(admin)
+    db_session.flush()
+    doc = Document(title="Academic Staff Directory", category="general", filename="staff-directory.txt",
+                   storage_path="x", version=1, approval_status="approved", uploaded_by=admin.id)
+    db_session.add(doc)
+    db_session.flush()
+    text = "Professor Mira Rao teaches Applied Mathematics. Office hours are Tuesday from 2 PM to 4 PM in Room 210."
+    db_session.add(DocumentChunk(document_id=doc.id, chunk_index=0, page_number=1, text=text))
+    db_session.commit()
+
+    sources = retrieve(db_session, "Give me the faculty details")
+
+    assert sources and sources[0]["text"] == text
+    evidence = confidence_features("Give me the faculty details", sources)
+    assert evidence["label"] in {"supported", "partial"}
+    assert evidence["coverage"] == 1.0
+
+
 def test_evidence_label_uses_configured_live_abstention_threshold(monkeypatch):
     source = {"document_id": 1, "text": "minimum", "lexical_score": 0.0}
     monkeypatch.setattr(settings, "evidence_minimum_score", 0.42)
@@ -73,6 +93,25 @@ def test_evidence_confidence_does_not_count_stopwords_as_policy_support():
     assert confidence["label"] == "unsupported"
     assert confidence["score"] == 0.0
     assert confidence["coverage"] == 0.0
+
+
+@pytest.mark.parametrize(("question", "text"), [
+    (
+        "According to the document, how should students apply and what happens next?",
+        "How to Apply: express interest through your Training and Placement Officer and complete the application form. Successful candidates advance to a competency-based interview.",
+    ),
+    (
+        "What benefits does the document specifically mention?",
+        "Benefits include health and wellness packages, rewards, and learning opportunities.",
+    ),
+])
+def test_evidence_confidence_normalizes_document_question_framing_and_application_variants(question, text):
+    source = {"document_id": 32, "title": "Placement Role", "text": text, "lexical_score": 1.0}
+
+    confidence = confidence_features(question, [source])
+
+    assert confidence["label"] == "supported"
+    assert confidence["coverage"] == 1.0
 
 
 @pytest.mark.parametrize(("query", "title", "filename", "text"), [
@@ -207,8 +246,14 @@ def test_qdrant_query_contract_applies_placement_filters(monkeypatch):
     assert request["collection_name"] == "campusai_test"
     assert request["query"] == [0.6, 0.8]
     assert request["limit"] == 5
-    assert {condition.key for condition in request["query_filter"].must} == {"approval_status", "category", "company_id", "academic_year", "version"}
-    status_condition = next(condition for condition in request["query_filter"].must if condition.key == "approval_status")
+    conditions = request["query_filter"].must
+    assert {condition.key for condition in conditions if isinstance(condition, qm.FieldCondition)} == {
+        "approval_status", "category", "academic_year", "version",
+    }
+    company_scope = next(condition for condition in conditions if isinstance(condition, qm.Filter))
+    assert {condition.key for condition in company_scope.should if isinstance(condition, qm.FieldCondition)} == {"company_id"}
+    assert any(isinstance(condition, qm.IsEmptyCondition) for condition in company_scope.should)
+    status_condition = next(condition for condition in conditions if isinstance(condition, qm.FieldCondition) and condition.key == "approval_status")
     assert status_condition.match == qm.MatchAny(any=["approved"])
 
 

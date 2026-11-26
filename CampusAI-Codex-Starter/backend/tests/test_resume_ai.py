@@ -1,6 +1,8 @@
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from app.ai import gemini, resume
 from app.core.config import settings
 
@@ -68,18 +70,12 @@ def test_role_guidance_returns_gemini_skill_match_and_section_edits(monkeypatch)
     assert [item["skill"] for item in result["resume_changes"]] == ["Docker"]
 
 
-def test_resume_and_target_role_are_analyzed_in_one_gemini_request(monkeypatch):
+def test_resume_analysis_does_not_generate_or_request_skill_gap_output(monkeypatch):
     monkeypatch.setattr(settings, "gemini_api_key", "resume-key")
     calls = []
     output = {
         "summary": "A Python developer.", "strengths": ["Built an API."], "improvement_areas": [],
         "extracted_sections": {"skills": ["Python"], "education": [], "projects": ["Built a Python API."], "experience": []},
-        "role_comparison": {
-            "role_summary": "Backend developer", "candidate_alignment": "Python is evidenced.",
-            "required_skills": ["Python", "Docker"], "matching_skills": ["Python"], "missing_skills": ["Docker"],
-            "roadmap": [{"skill": "Docker", "priority": "medium", "topics": "Images", "project": "Containerize an API", "estimated_duration": "1 week"}],
-            "resume_changes": [{"skill": "Docker", "section": "Projects", "current_excerpt": "Built a Python API.", "change": "After building it, describe the container setup."}],
-        },
     }
 
     class Models:
@@ -88,21 +84,16 @@ def test_resume_and_target_role_are_analyzed_in_one_gemini_request(monkeypatch):
             return SimpleNamespace(text=json.dumps(output))
 
     monkeypatch.setattr(resume, "_create_client", lambda _key: SimpleNamespace(models=Models()))
-    result = resume.analyze_resume_text("Skills: Python\nProjects: Built a Python API.", "Backend Developer", "Python and Docker required for API development.")
+    result = resume.analyze_resume_text("Skills: Python\nProjects: Built a Python API.")
 
     assert len(calls) == 1
     assert "Built a Python API" in calls[0]
-    assert "Backend Developer" in calls[0] and "Docker required" in calls[0]
-    assert result["role_comparison"]["matching_skills"] == ["Python"]
-    assert result["role_comparison"]["missing_skills"] == ["Docker"]
-
-    title_only_result = resume.analyze_resume_text("Skills: Python\nProjects: Built a Python API.", "Data Engineer")
-    assert len(calls) == 2
-    assert "Data Engineer" in calls[1]
-    assert title_only_result["role_comparison"]["required_skills"] == ["Python", "Docker"]
+    assert "role_comparison" not in result
+    assert "required_skills" not in calls[0]
+    assert "Docker" not in calls[0]
 
 
-def test_resume_generation_uses_a_bounded_free_model_fallback_chain(monkeypatch):
+def test_resume_generation_uses_only_the_two_approved_models(monkeypatch):
     monkeypatch.setattr(settings, "gemini_api_key", "resume-key")
     monkeypatch.setattr(resume, "_create_client", lambda _key: SimpleNamespace())
     captured = {}
@@ -113,18 +104,19 @@ def test_resume_generation_uses_a_bounded_free_model_fallback_chain(monkeypatch)
 
     monkeypatch.setattr(resume, "generate_content_with_fallback", generate)
     assert resume._generate_json("Return JSON.") == {"ok": True}
-    assert captured["max_models"] == 4
-    assert captured["retry_503"] is False
+    assert captured["max_models"] == 2
+    assert captured["retry_transient_errors"] is True
     assert captured["config"]["max_output_tokens"] == 1600
 
 
-def test_resume_generation_skips_a_503_model_and_uses_fallback(monkeypatch):
+@pytest.mark.parametrize("status_code", [503, 504])
+def test_resume_generation_retries_transient_server_errors_before_fallback(monkeypatch, status_code):
     monkeypatch.setattr(settings, "gemini_api_key", "resume-key")
     attempts = []
     delays = []
 
     class TemporaryUnavailable(Exception):
-        code = 503
+        code = status_code
 
     class Models:
         def generate_content(self, **_kwargs):
@@ -140,7 +132,7 @@ def test_resume_generation_skips_a_503_model_and_uses_fallback(monkeypatch):
 
     assert result == {"ok": True}
     assert len(attempts) == 2
-    assert delays == []
+    assert delays == [2.0]
 
 
 def test_malformed_gemini_json_is_retried(monkeypatch):

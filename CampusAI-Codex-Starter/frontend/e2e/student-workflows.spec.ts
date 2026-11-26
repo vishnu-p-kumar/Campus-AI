@@ -8,6 +8,21 @@ test("public landing page reports the local API connection", async ({ page }) =>
   await expect(page.getByText("Backend API connected", { exact: true })).toBeVisible({ timeout: 10_000 });
 });
 
+test("student details returns to dashboard without losing the signed-in session", async ({ page }) => {
+  const email = `student-details-nav-${Date.now()}@example.edu`;
+  await page.goto("/register");
+  await page.getByLabel("Full name").fill("Student Details Navigation");
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill("e2e-safe-password-2026");
+  await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page).toHaveURL(/\/dashboard$/);
+  await page.goto("/student-details");
+  await expect(page.getByRole("heading", { name: "Student details", exact: true })).toBeVisible();
+  await page.getByRole("link", { name: /Back to dashboard/ }).click();
+  await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(page.getByRole("heading", { name: "Hello, Student" })).toBeVisible();
+});
+
 test("interview Q&A keeps the submitted question visible and renders the answer", async ({ page }) => {
   const email = `interview-qa-${Date.now()}@example.edu`;
   await page.goto("/register");
@@ -15,6 +30,7 @@ test("interview Q&A keeps the submitted question visible and renders the answer"
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill("e2e-safe-password-2026");
   await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page).toHaveURL(/\/dashboard$/);
   await page.goto("/interviews");
   await page.getByRole("tab", { name: "Ask questions and doubts" }).click();
   await page.route("**/api/v1/interviews/ask", async (route) => {
@@ -51,7 +67,10 @@ test("coding practice displays only a short code question and selectable choices
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill("e2e-safe-password-2026");
   await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page).toHaveURL(/\/dashboard$/);
   await page.goto("/interviews");
+  await expect(page.getByLabel("Interview category")).toHaveValue("aptitude");
+  await expect(page.getByLabel("Answer format")).toHaveValue("multiple_choice");
   await page.route("**/api/v1/interviews/sessions", async (route) => {
     if (route.request().method() !== "POST") return route.continue();
     await route.fulfill({ json: {
@@ -81,11 +100,12 @@ test("student registers, completes multi-round practice, and sees private histor
   await expect(page).toHaveURL(/\/dashboard$/);
   await page.reload();
   await expect(page).toHaveURL(/\/dashboard$/);
-  await expect(page.getByText("E2E Practice Student", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Hello, E2E" })).toBeVisible();
 
   await page.goto("/interviews");
   await expect(page.getByRole("heading", { name: "Interview preparation" })).toBeVisible();
   await page.getByLabel("Interview category").selectOption("technical");
+  await page.getByLabel("Answer format").selectOption("typed");
   await page.getByLabel("Number of questions").fill("2");
   await page.getByLabel("Role or job specification (optional)").fill("backend developer");
   await page.getByRole("button", { name: "Start interview preparation" }).click();
@@ -111,6 +131,10 @@ test("student registers, completes multi-round practice, and sees private histor
   await expect(historyRow).toContainText("completed");
   await historyRow.getByRole("button", { name: /View practice session/ }).click();
   await expect(page.getByText(response).first()).toBeVisible();
+  page.once("dialog", (dialog) => dialog.accept());
+  await historyRow.getByRole("button", { name: /Delete practice session/ }).click();
+  await expect(page.getByRole("status")).toContainText("Practice history deleted");
+  await expect(historyRow).toHaveCount(0);
 
   await page.goto("/resumes");
   let compareCalls = 0;
@@ -124,9 +148,6 @@ test("student registers, completes multi-round practice, and sees private histor
       projects: ["Built a Python data analysis service."], experience: [], quality_feedback: [], ai_status: "complete",
       ai_review: { summary: "A student with Python and SQL skills and a data analysis project.", strengths: ["Built a data analysis service."],
         improvement_areas: [{ section: "Projects", current_excerpt: "Built a Python data analysis service.", recommendation: "Clarify the outcome.", changes_to_make: ["Add a verified result and your specific contribution."] }], provider: "Gemini" },
-      role_comparison: { id: 992, required_skills: ["python", "sql", "docker"], matching_skills: ["python", "sql"], missing_skills: ["docker"],
-        roadmap: [{ skill: "docker", priority: "medium", topics: "Images, volumes, networking", project: "Containerize a small API", estimated_duration: "1 week" }],
-        ai_guidance: { role_summary: "Data services role", candidate_alignment: "Python and SQL are evidenced.", resume_changes: [] }, ai_status: "complete", method: "AI role analysis" },
       privacy: "Resume file and full text are not saved.",
     } });
   });
@@ -142,21 +163,20 @@ test("student registers, completes multi-round practice, and sees private histor
     mimeType: "text/plain",
     buffer: Buffer.from("Alex Candidate\nEmail: alex@example.edu\nEducation: B.Tech 2027\nSkills: Python, SQL\nProject: Built a Python data analysis service."),
   });
-  await page.getByLabel("Target role title").fill("Data Engineer");
-  await page.getByLabel("Target role information (optional)").fill("Build data services and APIs with Python, SQL, and Docker.");
-  await page.getByRole("button", { name: "Analyze resume and role" }).click();
+  await page.getByRole("button", { name: "Analyze resume" }).click();
   await expect(page.getByRole("button", { name: "Analyzing…" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Back to resume tools" })).toBeVisible();
-  await expect(page.getByRole("status")).toContainText("Resume and role analysis complete.");
+  await expect(page.getByRole("button", { name: "Back to analysis" })).toBeVisible();
+  await expect(page.getByRole("status")).toContainText("Resume analysis complete.");
   expect(compareCalls).toBe(0);
   await expect(page.getByRole("heading", { name: "Skills to develop (1)" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Skill gap results" })).toHaveCount(0);
   await expect(page.locator(".analysis-result").first()).toContainText("python");
   await expect(page.getByLabel("Resume file", { exact: true })).toBeHidden();
-  await expect(page.getByRole("heading", { name: "Compare skills with another role" })).toHaveCount(0);
-  await page.getByRole("button", { name: "Back to resume tools" }).click();
+  await expect(page.getByRole("heading", { name: "Find skill gaps for a role" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Back to analysis" }).click();
   await expect(page.getByLabel("Resume file", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Skill Gap Matching" }).click();
-  await expect(page.getByRole("heading", { name: "Analyze a resume for a role" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Analyze a resume" })).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "Role information (optional)", exact: true })).toHaveValue("");
   await page.getByRole("textbox", { name: "Role title", exact: true }).fill("Frontend Developer");
   await page.getByRole("button", { name: "Find skill gaps" }).click();
@@ -171,9 +191,9 @@ test("student registers, completes multi-round practice, and sees private histor
   await expect(page.locator(".analysis-result")).toHaveCount(1);
   await expect(page.locator(".analysis-result").last()).toContainText("docker");
   await expect(page.locator(".analysis-result").last()).not.toContainText("A student with Python and SQL skills");
-  await expect(page.getByRole("button", { name: "Back to resume tools" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Back to analysis" })).toBeVisible();
   await expect(page.getByLabel("Role title", { exact: true })).toBeHidden();
-  await page.getByRole("button", { name: "Back to resume tools" }).click();
+  await page.getByRole("button", { name: "Back to analysis" }).click();
   await page.getByRole("button", { name: "Resume Analysis" }).click();
   await expect(page.getByLabel("Resume file", { exact: true })).toBeVisible();
   await expect(page.locator(".analysis-result")).toHaveCount(0);
@@ -182,11 +202,17 @@ test("student registers, completes multi-round practice, and sees private histor
   await page.getByRole("button", { name: "Skill Gap Matching" }).click();
   await expect(page.getByText("Select Resume Analysis and upload a resume before comparing it with a role.")).toBeVisible();
 
+  await page.route("**/api/v1/chat/", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ conversation_id: 991, answer: "I can help with placement-related questions using approved campus information.",
+      route: "other", queries_used: 1, daily_query_limit: 25, queries_remaining: 24, reset_date: "2026-11-26", citations: [] }),
+  }));
+  await page.route("**/api/v1/chat/conversations/991", (route) => route.fulfill({ status: 204 }));
   await page.goto("/chat");
-  await page.getByPlaceholder("Ask about policy, eligibility, drives, or placement steps…").fill("What is the cafeteria menu next Tuesday?");
+  await page.getByPlaceholder("Ask about placements, approved files, company details, or notifications…").fill("What is the cafeteria menu next Tuesday?");
   await page.getByRole("button", { name: "Send" }).click();
-  await expect(page.getByText(/safely abstained/)).toBeVisible();
-  await expect(page.getByText(/Heuristic evidence score: 0\.00 \(not a probability\) · Citation coverage: 0%/)).toBeVisible();
+  await expect(page.getByText("I can help with placement-related questions using approved campus information.")).toBeVisible();
   const savedChat = page.getByRole("button", { name: "Delete conversation: What is the cafeteria menu next Tuesday?" });
   await expect(savedChat).toBeVisible();
   await savedChat.click();
@@ -242,11 +268,10 @@ test("resume review selects a section and displays its targeted edits", async ({
   await page.getByLabel("Resume file", { exact: true }).setInputFiles({
     name: "sectioned-resume.txt", mimeType: "text/plain", buffer: Buffer.from("B.E. Computer Science. Built a FastAPI inventory service. Software intern at Example Labs. COMPLETE_RESUME_END_MARKER"),
   });
-  await page.getByLabel("Target role title").fill("Backend Developer");
-  await page.getByRole("button", { name: "Analyze resume and role" }).click();
+  await page.getByRole("button", { name: "Analyze resume" }).click();
   await expect(page.getByRole("status").filter({ hasText: "Your resume is being extracted and reviewed with AI" })).toBeVisible();
   await expect(page.getByLabel("Resume section")).toHaveValue("Projects");
-  await expect(page.getByRole("button", { name: "Back to resume tools" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Back to analysis" })).toBeVisible();
   await expect(page.getByLabel("Resume file", { exact: true })).toBeHidden();
   expect(await page.locator(".analysis-result").evaluate((result) => {
     const form = result.parentElement?.querySelector("form");
@@ -260,11 +285,11 @@ test("resume review selects a section and displays its targeted edits", async ({
   const analysisPanelWidth = await page.locator(".panel").first().evaluate((element) => element.getBoundingClientRect().width);
   expect(sectionWidth).toBeGreaterThan(analysisPanelWidth * 0.9);
   await expect(page.getByText("The project impact is unclear.")).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "Compare skills with another role" })).toHaveCount(0);
-  await page.getByRole("button", { name: "Back to resume tools" }).click();
+  await expect(page.getByRole("heading", { name: "Find skill gaps for a role" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Back to analysis" }).click();
   await expect(page.getByLabel("Resume file", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Skill Gap Matching" }).click();
-  await expect(page.getByRole("heading", { name: "Analyze a resume for a role" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Analyze a resume" })).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "Role title", exact: true })).toHaveAttribute("required", "");
   await expect(page.getByRole("textbox", { name: "Role information (optional)", exact: true })).not.toHaveAttribute("required");
   await page.getByRole("textbox", { name: "Role title", exact: true }).fill("Data Analyst");
@@ -282,10 +307,10 @@ test("resume review selects a section and displays its targeted edits", async ({
   expect(analyzeCalls).toBe(1);
   expect(compareCalls).toBe(1);
   await expect(page.locator(".analysis-result")).toHaveCount(1);
-  await expect(page.getByRole("heading", { name: "Analyze a resume for a role" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Back to resume tools" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Analyze a resume" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Back to analysis" })).toBeVisible();
   await expect(page.getByLabel("Role title", { exact: true })).toBeHidden();
-  await page.getByRole("button", { name: "Back to resume tools" }).click();
+  await page.getByRole("button", { name: "Back to analysis" }).click();
   await page.getByRole("button", { name: "Resume Analysis" }).click();
   await expect(page.getByLabel("Resume file", { exact: true })).toBeVisible();
   await expect(page.locator(".analysis-result")).toHaveCount(0);
@@ -302,6 +327,7 @@ test("resume analysis shows a clear error and exits the loading state when AI is
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill("e2e-safe-password-2026");
   await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page).toHaveURL(/\/dashboard$/);
   await page.route("**/api/v1/resumes/analyze", async (route) => {
     await route.fulfill({ status: 503, json: { detail: "Resume analysis is temporarily unavailable. Try again later." } });
   });
@@ -309,11 +335,81 @@ test("resume analysis shows a clear error and exits the loading state when AI is
   await page.getByLabel("Resume file", { exact: true }).setInputFiles({
     name: "resume.txt", mimeType: "text/plain", buffer: Buffer.from("Skills: Python. Project: Built an API."),
   });
-  await page.getByLabel("Target role title").fill("Backend Developer");
-  await page.getByRole("button", { name: "Analyze resume and role" }).click();
+  await page.getByRole("button", { name: "Analyze resume" }).click();
   await expect(page.locator(".notice-error")).toContainText("Resume analysis is temporarily unavailable");
-  await expect(page.getByRole("button", { name: "Analyze resume and role" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Analyze resume" })).toBeEnabled();
   await expect(page.getByRole("status").filter({ hasText: "Your resume is being extracted" })).toHaveCount(0);
+});
+
+test("saved resume and skill histories restore by role and survive a failed new analysis", async ({ page }) => {
+  const email = `resume-history-${Date.now()}@example.edu`;
+  await page.goto("/register");
+  await page.getByLabel("Full name").fill("E2E Resume History Student");
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill("e2e-safe-password-2026");
+  await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page).toHaveURL(/\/dashboard$/);
+
+  const makeGap = (id: number, resumeId: number, role: string) => ({
+    id, resume_analysis_id: resumeId, job_title: role, required_skills: ["Python", "SQL"],
+    matching_skills: ["Python"], missing_skills: ["SQL"], roadmap: [], ai_status: "complete",
+    ai_guidance: { role_summary: `${role} role`, candidate_alignment: "Python is evidenced in the saved resume.", resume_changes: [] },
+    method: "Saved role comparison", created_at: `2026-11-${id === 103 ? "25" : id === 102 ? "24" : "23"}T10:00:00Z`,
+  });
+  const makeAnalysis = (id: number, filename: string, role: string) => ({
+    id, filename, skills: ["Python"], education: ["B.Tech 2027"], projects: ["Built a Python API"], experience: [],
+    quality_feedback: [], ai_status: "complete", privacy: "Resume file and full text are not saved.",
+    ai_review: { summary: `Saved summary for ${role}.`, strengths: ["Built a project."], improvement_areas: [], provider: "Gemini" },
+    created_at: `2026-11-${id === 3 ? "25" : "22"}T09:00:00Z`,
+  });
+  const analyses = [makeAnalysis(3, "resume-analyst.txt", "Data Analyst"), makeAnalysis(2, "resume-engineer.txt", "Data Engineer")];
+  const gaps = [makeGap(103, 3, "Backend Developer"), makeGap(101, 3, "Data Analyst"), makeGap(102, 2, "Data Engineer")];
+  await page.route("**/api/v1/resumes/history", (route) => route.fulfill({ json: analyses }));
+  await page.route("**/api/v1/resumes/skill-gap/history", (route) => route.fulfill({ json: gaps }));
+  await page.route("**/api/v1/resumes/history/2", (route) => route.fulfill({ status: 204, body: "" }));
+  await page.route("**/api/v1/resumes/skill-gap/history/103", (route) => route.fulfill({ status: 204, body: "" }));
+  await page.route("**/api/v1/resumes/history", (route) => route.request().method() === "DELETE"
+    ? route.fulfill({ status: 204, body: "" })
+    : route.fulfill({ json: analyses }));
+
+  await page.route("**/api/v1/resumes/analyze", (route) => route.fulfill({ status: 503, json: {
+    detail: "Gemini is temporarily overloaded or timed out. Your resume analysis was not saved. Wait briefly, then retry.",
+  } }));
+  await page.goto("/resumes");
+  await expect(page.getByText("Saved summary for Data Analyst.")).toBeVisible();
+  await page.reload();
+  await expect(page.getByText("Saved summary for Data Analyst.")).toBeVisible();
+  await page.getByRole("button", { name: "View saved results" }).click();
+  await expect(page.getByRole("heading", { name: "Resume analyses" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Skill comparisons" })).toBeVisible();
+  await expect(page.locator("#saved-resume-heading").locator("..").locator(".saved-result-card").filter({ hasText: "resume-engineer.txt" })).toBeVisible();
+  await page.locator("#saved-skill-heading").locator("..").getByRole("button", { name: /Backend Developer resume-/ }).click();
+  await expect(page.getByText("Saved comparison: Backend Developer")).toBeVisible();
+  await page.getByRole("button", { name: "Back to saved results" }).click();
+  await expect(page.getByRole("heading", { name: "Resume analyses" })).toBeVisible();
+  await page.locator("#saved-skill-heading").locator("..").getByRole("button", { name: /Backend Developer resume-/ }).click();
+  await expect(page.getByText("Saved comparison: Backend Developer")).toBeVisible();
+
+  await page.getByRole("button", { name: "Back to saved results" }).click();
+  await page.getByRole("button", { name: "← Back to analysis" }).click();
+  await page.getByRole("button", { name: "Resume Analysis" }).click();
+  await page.getByLabel("Resume file", { exact: true }).setInputFiles({
+    name: "new-resume.txt", mimeType: "text/plain", buffer: Buffer.from("Skills: Java. Project: Built a Java service."),
+  });
+  await page.getByRole("button", { name: "Analyze resume" }).click();
+  await expect(page.locator(".notice-error")).toContainText("Gemini is temporarily overloaded");
+  await expect(page.getByText("resume-analyst.txt")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Skill gap results" })).toBeVisible();
+  await page.getByRole("button", { name: "Skill gap results" }).click();
+  await expect(page.getByText("Saved comparison: Backend Developer")).toBeVisible();
+  await page.getByRole("button", { name: "View saved results" }).click();
+  await page.getByRole("button", { name: "Delete resume analysis resume-engineer.txt" }).click();
+  await expect(page.locator("#saved-resume-heading").locator("..").locator(".saved-result-card").filter({ hasText: "resume-engineer.txt" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Delete skill comparison Backend Developer" }).click();
+  await expect(page.getByRole("button", { name: /Backend Developer/ })).toHaveCount(0);
+  await page.getByRole("button", { name: "Delete all saved results" }).click();
+  await expect(page.getByText("No resume analyses saved yet.")).toBeVisible();
+  await expect(page.getByText("No skill comparisons saved yet.")).toBeVisible();
 });
 
 test("student completes Hindi interview practice with localized fallback feedback", async ({ page }) => {
@@ -327,6 +423,7 @@ test("student completes Hindi interview practice with localized fallback feedbac
 
   await page.goto("/interviews");
   await page.getByLabel("Interview category").selectOption("technical");
+  await page.getByLabel("Answer format").selectOption("typed");
   await page.getByLabel("Language").selectOption("hi");
   await page.getByLabel("Number of questions").fill("2");
   await page.getByLabel("Role or job specification (optional)").fill("Hindi E2E analyst");
@@ -371,7 +468,7 @@ test("student can ask interview questions and doubts separately", async ({ page 
   await page.getByPlaceholder("Type your interview question or doubt…").fill("What is a database index?");
   await page.getByRole("button", { name: "Ask question" }).click();
   await expect(page.locator(".interview-qa-question")).toContainText("What is a database index?");
-  await expect(page.locator(".interview-qa-answer")).toContainText("Short answer");
+  await expect(page.locator(".interview-qa-answer")).toContainText("Answer");
   await expect(page.getByText("An index helps a database find matching rows faster.")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Explanation" })).toBeVisible();
 });
@@ -407,13 +504,14 @@ test("student can select and submit a multiple-choice interview answer", async (
         feedback: { strengths: ["Correct choice."], improvements: ["Correct answer: B. GET"], assessment_note: "Practice only." } }] }),
   }));
   await page.goto("/interviews");
+  await page.getByLabel("Interview category").selectOption("technical");
   await page.getByLabel("Answer format").selectOption("multiple_choice");
   await page.getByRole("button", { name: "Start interview preparation" }).click();
   await expect(page.getByText("Which method reads an HTTP resource?")).toBeVisible();
   await page.getByLabel(/B\. GET/).check();
   await page.getByRole("button", { name: "Submit interview" }).click();
   await expect(page.getByRole("heading", { name: "Your answers and feedback" })).toBeVisible();
-  await expect(page.getByText("1/1", { exact: true })).toBeVisible();
+  await expect(page.getByText("1/1", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Correct answers", { exact: true })).toBeVisible();
   await expect(page.getByText("Correct answer: B. GET").first()).toBeVisible();
   await page.getByRole("row").filter({ hasText: "Backend developer" }).getByRole("button", { name: "View practice session 951" }).click();
@@ -448,6 +546,7 @@ test("multiple-choice options update when the next interview question loads", as
       question_limit: 2, average_score: 4, results: [] }) });
   });
   await page.goto("/interviews");
+  await page.getByLabel("Interview category").selectOption("technical");
   await page.getByLabel("Answer format").selectOption("multiple_choice");
   await page.getByLabel("Number of questions").fill("2");
   await page.getByRole("button", { name: "Start interview preparation" }).click();
@@ -489,15 +588,6 @@ test("placement administrator signs in and manages verified company records", as
   await page.getByRole("link", { name: "Back to admin dashboard" }).click();
   await expect(page.getByRole("heading", { name: "Administration" })).toBeVisible();
 
-  const authorizedDomain = `e2e-${Date.now()}.example.edu`;
-  await page.getByLabel("Official page URL").fill(`https://www.${authorizedDomain}/placement/policy`);
-  await page.getByRole("button", { name: "Add authorized URL" }).click();
-  const authorizedRow = page.locator("li").filter({ hasText: authorizedDomain });
-  await expect(authorizedRow).toContainText(authorizedDomain);
-  await expect(page.getByRole("checkbox", { name: /Enable authorized URL lookup/ })).toBeDisabled();
-  await authorizedRow.getByRole("button", { name: "Remove" }).click();
-  await expect(authorizedRow).toHaveCount(0);
-
   const documentTitle = `E2E Placement Policy ${Date.now()}`;
   await page.locator('input[type="file"]').setInputFiles({
     name: `${documentTitle}.txt`,
@@ -533,49 +623,64 @@ test("placement administrator signs in and manages verified company records", as
 
 });
 
-test("student completes profile, checks published eligibility, and applies to a drive", async ({ page }) => {
+test("student attaches a resume to each application without resume analysis gating eligibility", async ({ page }) => {
   expect(e2eCompanyName).not.toBe("");
+  const email = `eligible-${Date.now()}@example.edu`;
+  const password = "e2e-safe-password-2026";
   await page.goto("/register");
   await page.getByLabel("Full name").fill("E2E Eligible Candidate");
-  await page.getByLabel("Email").fill(`eligible-${Date.now()}@example.edu`);
-  await page.getByLabel("Password").fill("e2e-safe-password-2026");
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill(password);
   await page.getByRole("button", { name: "Create account" }).click();
   await expect(page).toHaveURL(/\/dashboard$/);
 
-  await page.getByLabel("Branch").fill("Computer Science");
-  await page.getByLabel("Graduation year").fill("2027");
-  await page.getByLabel("CGPA (0–10)").fill("8.5");
-  await page.getByLabel("Active backlogs").fill("0");
-  await page.getByRole("button", { name: "Save academic profile" }).click();
-  await expect(page.getByRole("status")).toContainText("Profile saved");
+  // Academic details are managed by placement staff, so update the test student
+  // through the same administrator API instead of expecting a student edit form.
+  const apiBase = process.env.E2E_API_BASE_URL ?? "http://localhost:8100";
+  const adminLogin = await page.request.post(`${apiBase}/api/v1/auth/login`, {
+    data: { email: process.env.E2E_STAFF_EMAIL, password: process.env.E2E_STAFF_PASSWORD },
+  });
+  expect(adminLogin.ok()).toBeTruthy();
+  const { access_token: adminToken } = await adminLogin.json() as { access_token: string };
+  const recordsResponse = await page.request.get(`${apiBase}/api/v1/admin/students`, {
+    headers: { Authorization: `Bearer ${adminToken}` },
+  });
+  expect(recordsResponse.ok()).toBeTruthy();
+  const students = await recordsResponse.json() as Array<{ id: number; email: string }>;
+  const student = students.find((record) => record.email === email);
+  expect(student).toBeDefined();
+  const updateResponse = await page.request.put(`${apiBase}/api/v1/admin/students/${student!.id}`, {
+    headers: { Authorization: `Bearer ${adminToken}` },
+    data: { branch: "Computer Science", graduation_year: 2027, cgpa: 8.5, active_backlogs: 0 },
+  });
+  expect(updateResponse.ok()).toBeTruthy();
+
+  await page.goto("/login");
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill(password);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page).toHaveURL(/\/dashboard$/);
 
   await page.goto("/companies");
   const companyCard = page.locator(".company-card").filter({ hasText: e2eCompanyName });
   await companyCard.getByRole("button", { name: "Check my eligibility" }).click();
   await expect(companyCard.locator(".eligibility-result")).toContainText("eligible");
   const driveRow = page.getByRole("row").filter({ hasText: e2eCompanyName });
+  await expect(driveRow.getByRole("button", { name: "Apply" })).toBeDisabled();
+  await driveRow.getByLabel(/Resume for/).setInputFiles({ name: "candidate.txt", mimeType: "text/plain", buffer: Buffer.from("Candidate skills: Python") });
+  await expect(driveRow.getByRole("button", { name: "Apply" })).toBeEnabled();
+  const applicationResponse = page.waitForResponse((response) => response.url().includes("/api/v1/placement-drives/") && response.url().endsWith("/apply") && response.request().method() === "POST");
   await driveRow.getByRole("button", { name: "Apply" }).click();
-  await expect(page.getByRole("status")).toContainText("Application recorded");
+  expect((await applicationResponse).status()).toBe(201);
+  await expect(driveRow.getByText("Applied", { exact: true })).toBeVisible();
+  await expect(page.getByRole("status")).toContainText("Applied to");
   await page.goto("/dashboard");
-  const applicationsPanel = page.locator(".panel").filter({ has: page.getByRole("heading", { name: "Applications" }) });
-  await expect(applicationsPanel.getByText(`${e2eCompanyName} · Software Engineer`)).toBeVisible();
-
-  await page.goto("/login");
-  await page.getByLabel("Email").fill(process.env.E2E_STAFF_EMAIL ?? "");
-  await page.getByLabel("Password").fill(process.env.E2E_STAFF_PASSWORD ?? "");
-  await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page).toHaveURL(/\/admin$/);
-  const registeredCompany = page.locator(".panel").filter({ has: page.getByRole("heading", { name: /Registered companies/ }) })
-    .locator("li").filter({ hasText: e2eCompanyName });
-  await registeredCompany.getByRole("link", { name: "View students" }).click();
-  await expect(page).toHaveURL(/\/admin\/companies\/\d+\/students$/);
-  await expect(page.getByRole("heading", { name: e2eCompanyName })).toBeVisible({ timeout: 15_000 });
-  await expect(page.getByRole("row").filter({ hasText: "E2E Eligible Candidate" })).toContainText("Software Engineer");
-  await page.getByRole("link", { name: "Back to admin dashboard" }).click();
-  await expect(page.getByRole("heading", { name: "Administration" })).toBeVisible();
+  const activity = page.locator(".panel").filter({ has: page.getByRole("heading", { name: "Applications" }) });
+  await expect(activity).toContainText(e2eCompanyName);
+  await expect(activity).toContainText("applied");
 });
 
-test("chat displays cited source metadata and heuristic evidence labels from the API contract", async ({ page }) => {
+test("chat shows a clean answer without revealing source details", async ({ page }) => {
   await page.route("**/api/v1/chat/", async (route) => {
     if (route.request().method() !== "POST") return route.continue();
     await route.fulfill({
@@ -583,16 +688,14 @@ test("chat displays cited source metadata and heuristic evidence labels from the
       contentType: "application/json",
       body: JSON.stringify({
         conversation_id: 9876,
-        answer: "The minimum CGPA is 7.5 [1].",
-        confidence: 0.86,
-        confidence_label: "supported",
-        evidence_minimum_score: 0.35,
-        citation_coverage: 1,
+        answer: "The minimum CGPA is 7.5.",
+        route: "faq",
+        queries_used: 1,
+        daily_query_limit: 25,
+        queries_remaining: 24,
+        reset_date: "2026-11-26",
         citations: [{ citation: 1, document_id: 88, title: "Approved Placement Policy", version: 2, page: 3,
           section: "Eligibility", effective_date: null, status: "approved" }],
-        temporal_warnings: [],
-        claim_support: [{ sentence: 1, citation_numbers: [1], citation_associated: true,
-          numeric_claims: ["7.5"], unsupported_numeric_claims: [] }],
         abstained: false,
       }),
     });
@@ -606,13 +709,12 @@ test("chat displays cited source metadata and heuristic evidence labels from the
   await expect(page).toHaveURL(/\/dashboard$/);
 
   await page.goto("/chat");
-  await page.getByPlaceholder("Ask about policy, eligibility, drives, or placement steps…").fill("What CGPA is required?");
+  await page.getByPlaceholder("Ask about placements, approved files, company details, or notifications…").fill("What CGPA is required?");
   await page.getByRole("button", { name: "Send" }).click();
   const answer = page.locator(".message-assistant");
-  await expect(answer).toContainText("The minimum CGPA is 7.5 [1].");
-  await expect(answer).toContainText("Heuristic evidence score: 0.86 (not a probability) · Citation coverage: 100%");
-  await expect(answer).toContainText("Minimum cutoff: 0.35");
-  await expect(answer.locator(".citation-list")).toContainText("[1] Approved Placement Policy, v2, p. 3, section: Eligibility");
+  await expect(answer).toContainText("The minimum CGPA is 7.5.");
+  await expect(answer).not.toContainText("Approved Placement Policy");
+  await expect(answer).not.toContainText("[1]");
 });
 
 

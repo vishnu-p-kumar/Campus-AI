@@ -105,6 +105,8 @@ class Application(Base):
     student_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     drive_id: Mapped[int] = mapped_column(ForeignKey("placement_drives.id", ondelete="CASCADE"), index=True)
     status: Mapped[str] = mapped_column(String(40), default="applied")
+    resume_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    resume_storage_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     applied_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     drive: Mapped["PlacementDrive"] = relationship()
 
@@ -172,31 +174,6 @@ class DocumentChunk(Base):
     vector_id: Mapped[str | None] = mapped_column(String(80), index=True)
     document: Mapped[Document] = relationship(back_populates="chunks")
     __table_args__ = (UniqueConstraint("document_id", "chunk_index", name="uq_document_chunk"),)
-
-
-class AuthorizedSourceDomain(Base):
-    __tablename__ = "authorized_source_domains"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    domain: Mapped[str] = mapped_column(String(253), unique=True)
-    added_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-
-
-class AuthorizedSourceUrl(Base):
-    __tablename__ = "authorized_source_urls"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    domain_id: Mapped[int] = mapped_column(ForeignKey("authorized_source_domains.id", ondelete="CASCADE"), index=True)
-    url: Mapped[str] = mapped_column(String(2048), unique=True)
-    added_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-
-
-class PlacementAssistantSetting(Base):
-    __tablename__ = "placement_assistant_settings"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    url_context_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    updated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 class DocumentIngestionJob(Base):

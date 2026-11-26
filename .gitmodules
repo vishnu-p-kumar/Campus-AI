@@ -1,0 +1,3 @@
+[submodule "placement-query-bot-deploy"]
+	path = placement-query-bot-deploy
+	url = https://github.com/Vins-Tech/placement-query-bot-deploy.git

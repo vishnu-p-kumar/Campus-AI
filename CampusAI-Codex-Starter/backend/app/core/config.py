@@ -1,8 +1,11 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
+
+BACKEND_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 
 class Settings(BaseSettings):
@@ -22,15 +25,11 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     # GEMINI_API_KEY is reserved for resume review and role-skill guidance.
     gemini_api_key: str | None = Field(default=None, repr=False)
-    # Placement uses its own key; Gemini quotas are scoped to the key's AI Studio project.
-    gemini_placement_api_key: str | None = Field(default=None, repr=False)
     # Interview workflows may use a separate key/project from placement and resume.
     gemini_chat_api_key: str | None = Field(default=None, repr=False)
     gemini_model: str = "gemini-3.5-flash-lite"
-    # Free standard-tier models used when the primary model is rate-limited.
-    gemini_fallback_models: str = "gemini-2.5-flash-lite,gemini-2.5-flash,gemini-3.1-flash-lite,gemini-3.8-flash,gemini-3.6-flash"
-    # Gemini URL Context only reads URLs explicitly approved by an administrator.
-    gemini_url_context_enabled: bool = False
+    # Only use this approved fallback after the shared primary model.
+    gemini_fallback_models: str = "gemini-3.1-flash-lite"
     qdrant_url: str | None = None
     qdrant_api_key: str | None = None
     qdrant_collection: str = "campusai_document_chunks"
@@ -59,7 +58,7 @@ class Settings(BaseSettings):
     smtp_from_email: str | None = None
     password_reset_url: str = "http://localhost:3000/reset-password"
 
-    model_config = SettingsConfigDict(env_file=("backend/.env", ".env"), extra="ignore", case_sensitive=False)
+    model_config = SettingsConfigDict(env_file=(BACKEND_ENV_FILE, ".env"), extra="ignore", case_sensitive=False)
 
     @model_validator(mode="after")
     def build_postgres_url(self) -> "Settings":

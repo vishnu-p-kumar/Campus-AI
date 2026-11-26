@@ -27,8 +27,8 @@ function InterviewPrompt({ question, coding = false }: { question: string; codin
 function InterviewsContent() {
   const { api } = useAuth();
   const [mode, setMode] = useState<"prepare" | "ask">("prepare");
-  const [category, setCategory] = useState("technical");
-  const [questionType, setQuestionType] = useState<"typed" | "multiple_choice">("typed");
+  const [category, setCategory] = useState("aptitude");
+  const [questionType, setQuestionType] = useState<"typed" | "multiple_choice">("multiple_choice");
   const [language, setLanguage] = useState("en");
   const [focus, setFocus] = useState("");
   const [questionLimit, setQuestionLimit] = useState(5);
@@ -44,6 +44,7 @@ function InterviewsContent() {
   const [doubt, setDoubt] = useState("");
   const [doubtMessages, setDoubtMessages] = useState<DoubtMessage[]>([]);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
 
   const loadHistory = useCallback(async () => setHistory(await api<InterviewSummary[]>("/api/v1/interviews/history")), [api]);
@@ -52,7 +53,8 @@ function InterviewsContent() {
   async function start() {
     setBusy(true); setError(""); setPracticeReview(null); setAnsweredCount(0); setQuestions([]); setQuestionIndex(0); setTypedAnswers([]); setOptionAnswers([]);
     try {
-      const created = await api<Session>("/api/v1/interviews/sessions", { method: "POST", body: JSON.stringify({ category, language, focus: focus.trim() || null, question_type: questionType, question_limit: questionLimit }) });
+      const effectiveQuestionType = category === "aptitude" || category === "coding" ? "multiple_choice" : questionType;
+      const created = await api<Session>("/api/v1/interviews/sessions", { method: "POST", body: JSON.stringify({ category, language, focus: focus.trim() || null, question_type: effectiveQuestionType, question_limit: questionLimit }) });
       setSession(created); setQuestions([created]); void loadHistory().catch(() => setError("Practice history could not be refreshed."));
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not start practice"); }
     finally { setBusy(false); }
@@ -143,12 +145,25 @@ function InterviewsContent() {
     catch (cause) { setError(cause instanceof Error ? cause.message : "Practice details could not be loaded"); }
     finally { setBusy(false); }
   }
+  async function deletePractice(item: InterviewSummary) {
+    if (!window.confirm(`Delete this ${item.category} practice test and all of its saved answers? This cannot be undone.`)) return;
+    setBusy(true); setError(""); setNotice("");
+    try {
+      await api<void>(`/api/v1/interviews/history/${item.id}`, { method: "DELETE" });
+      if (historyDetail?.id === item.id) setHistoryDetail(null);
+      if (practiceReview?.id === item.id) setPracticeReview(null);
+      await loadHistory();
+      setNotice("Practice history deleted.");
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Practice history could not be deleted"); }
+    finally { setBusy(false); }
+  }
 
   if (session && currentQuestion) return <main className="interview-session-screen">
     <header className="interview-session-header"><div><p className="eyebrow">INTERVIEW PRACTICE</p><span className="muted">Question {questionIndex + 1} of {session.question_limit}</span></div>
       {finalQuestion && <button className="button button-primary" onClick={() => void submitFinalAnswer()} disabled={busy || (currentQuestion.question_type === "multiple_choice" ? !currentOptionAnswer : currentTypedAnswer.trim().length < 10)}>{busy ? "Submitting…" : "Submit interview"}</button>}
     </header>
     {error && <div className="notice notice-error" role="alert">{clean(error)}</div>}
+    {currentQuestion.generation_mode === "curated-question-bank" && <p className="muted" role="status">{session.language === "hi" ? "AI प्रश्न निर्माण अस्थायी रूप से अनुपलब्ध है; यह प्रश्न अंग्रेज़ी अभ्यास प्रश्न बैंक से है।" : session.language === "kn" ? "AI ಪ್ರಶ್ನೆ ರಚನೆ ತಾತ್ಕಾಲಿಕವಾಗಿ ಲಭ್ಯವಿಲ್ಲ; ಈ ಪ್ರಶ್ನೆ ಇಂಗ್ಲಿಷ್ ಅಭ್ಯಾಸ ಪ್ರಶ್ನೆ ಸಂಗ್ರಹದಿಂದ ಬಂದಿದೆ." : "AI question generation is temporarily unavailable; this question comes from the curated practice bank."}</p>}
     <section className="interview-question-content" aria-live="polite"><InterviewPrompt question={currentQuestion.question} coding={session.category === "coding"} />
       {currentQuestion.question_type === "multiple_choice" ? <fieldset className="interview-options"><legend>Choose one answer</legend>{currentQuestion.options.map((option) => <label className="interview-option" key={option.id}><input type="radio" name="interview-option" value={option.id} checked={currentOptionAnswer === option.id} disabled={questionIndex < answeredCount} onChange={() => setCurrentOptionAnswer(option.id)} /><span><strong>{option.id}.</strong> {clean(option.text)}</span></label>)}</fieldset> : <label className="interview-typed-answer">Your answer<textarea minLength={10} maxLength={8000} rows={9} required disabled={questionIndex < answeredCount} value={currentTypedAnswer} onChange={(event) => setCurrentTypedAnswer(event.target.value)} placeholder="Type your answer here…" /></label>}
     </section>
@@ -160,6 +175,7 @@ function InterviewsContent() {
   return <div className="stack-xl">
     <div className="page-heading"><div><p className="eyebrow">PRACTICE STUDIO</p><h1>Interview preparation</h1><p className="muted">Practice role-specific questions or ask about interview topics and doubts.</p></div></div>
     {error && <div className="notice notice-error" role="alert">{clean(error)}</div>}
+    {notice && <div className="notice notice-success" role="status">{notice}</div>}
     <div className="section-heading" role="tablist" aria-label="Interview tools">
       <button className={`button ${mode === "prepare" ? "button-primary" : "button-secondary"}`} role="tab" aria-selected={mode === "prepare"} onClick={() => setMode("prepare")}>Interview preparation</button>
       <button className={`button ${mode === "ask" ? "button-primary" : "button-secondary"}`} role="tab" aria-selected={mode === "ask"} onClick={() => setMode("ask")}>Ask questions and doubts</button>
@@ -167,8 +183,8 @@ function InterviewsContent() {
 
     {mode === "prepare" ? <div className="stack">
       <section className="panel"><p className="eyebrow">GENERATE PRACTICE QUESTIONS</p><h2>Set up your practice</h2><div className="form-stack">
-        <label>Interview category<select value={category} onChange={(e) => { const nextCategory = e.target.value; setCategory(nextCategory); if (nextCategory === "coding") setQuestionType("multiple_choice"); }}><option value="technical">Technical</option><option value="hr">HR</option><option value="aptitude">Aptitude</option><option value="coding">Coding</option></select></label>
-        <label>Answer format<select value={category === "coding" ? "multiple_choice" : questionType} disabled={category === "coding"} onChange={(e) => setQuestionType(e.target.value as "typed" | "multiple_choice")}><option value="typed">Typed answer</option><option value="multiple_choice">Multiple choice</option></select>{category === "coding" && <span className="field-hint">Coding questions include a code snippet and answer choices.</span>}</label>
+        <label>Interview category<select value={category} onChange={(e) => { const nextCategory = e.target.value; setCategory(nextCategory); if (nextCategory === "coding" || nextCategory === "aptitude") setQuestionType("multiple_choice"); }}><option value="technical">Technical</option><option value="hr">HR</option><option value="aptitude">Aptitude</option><option value="coding">Coding</option></select></label>
+        <label>Answer format<select value={category === "coding" || category === "aptitude" ? "multiple_choice" : questionType} disabled={category === "coding" || category === "aptitude"} onChange={(e) => setQuestionType(e.target.value as "typed" | "multiple_choice")}><option value="typed">Typed answer</option><option value="multiple_choice">Multiple choice</option></select>{category === "coding" ? <span className="field-hint">Coding questions include a code snippet and answer choices.</span> : category === "aptitude" ? <span className="field-hint">Aptitude practice uses multiple-choice questions; typed answers are not available.</span> : null}</label>
         <label>Language<select value={language} onChange={(e) => setLanguage(e.target.value)}><option value="en">English</option><option value="hi">Hindi</option><option value="kn">Kannada</option></select></label>
         <label>Number of questions<input type="number" min={1} max={20} value={questionLimit} onChange={(e) => setQuestionLimit(Math.max(1, Math.min(20, Number(e.target.value) || 1)))} /></label>
         <label>Role or job specification (optional)<textarea maxLength={2000} rows={4} value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="Paste a role title, requirements, or job specification…" /></label>
@@ -201,7 +217,7 @@ function InterviewsContent() {
     </section>}
 
     <section className="panel"><div className="section-heading"><div><p className="eyebrow">YOUR ACTIVITY</p><h2>Practice history</h2></div><button className="button button-ghost" onClick={() => void loadHistory()} disabled={busy}>Refresh</button></div>
-      {history.length ? <div className="table-wrap"><table><thead><tr><th>Started</th><th>Category</th><th>Focus</th><th>Questions</th><th>Score</th><th>Status</th><th>Details</th></tr></thead><tbody>{history.map((item) => <tr key={item.id}><td>{new Date(item.created_at).toLocaleDateString()}</td><td>{item.category}</td><td>{item.focus || "General"}</td><td>{item.response_count}/{item.question_limit}</td><td>{item.average_score === null ? "—" : item.question_type === "multiple_choice" ? `${Math.round(item.average_score * item.response_count)}/${item.response_count} correct` : `${item.average_score}/5 avg.`}</td><td>{item.status}</td><td><button className="button button-ghost" onClick={() => void viewPractice(item.id)} disabled={busy || item.status !== "completed"} aria-label={`View practice session ${item.id}`}>{item.status === "completed" ? "View answers" : "In progress"}</button></td></tr>)}</tbody></table></div> : <div className="empty-state">Completed and active practice sessions will appear here.</div>}
+      {history.length ? <div className="table-wrap"><table><thead><tr><th>Started</th><th>Category</th><th>Focus</th><th>Questions</th><th>Score</th><th>Status</th><th>Details</th><th>Action</th></tr></thead><tbody>{history.map((item) => <tr key={item.id}><td>{new Date(item.created_at).toLocaleDateString()}</td><td>{item.category}</td><td>{item.focus || "General"}</td><td>{item.response_count}/{item.question_limit}</td><td>{item.average_score === null ? "—" : item.question_type === "multiple_choice" ? `${Math.round(item.average_score * item.response_count)}/${item.response_count} correct` : `${item.average_score}/5 avg.`}</td><td>{item.status}</td><td><button className="button button-ghost" onClick={() => void viewPractice(item.id)} disabled={busy || item.status !== "completed"} aria-label={`View practice session ${item.id}`}>{item.status === "completed" ? "View answers" : "In progress"}</button></td><td><button className="button button-ghost" onClick={() => void deletePractice(item)} disabled={busy} aria-label={`Delete practice session ${item.id}`}>{busy ? "Deleting…" : "Delete"}</button></td></tr>)}</tbody></table></div> : <div className="empty-state">Completed and active practice sessions will appear here.</div>}
       {historyDetail && <div className="analysis-result"><div className="section-heading"><div><p className="eyebrow">SAVED PRACTICE</p><h3>{historyDetail.category} · {historyDetail.answered_count} questions</h3>{historyDetail.focus && <p className="muted">{clean(historyDetail.focus)}</p>}</div><div className="score-display"><strong>{historyDetail.question_type === "multiple_choice" ? `${historyDetail.results.filter((item) => item.score === 1).length}/${historyDetail.answered_count}` : historyDetail.average_score ?? "—"}</strong><span>{historyDetail.question_type === "multiple_choice" ? "Correct answers" : "Average / 5"}</span></div></div>
         {historyDetail.results.map((item, index) => <article className="question-card" key={`${historyDetail.id}-${index}`}><h4>{index + 1}. {clean(item.question)}</h4>{historyDetail.question_type === "multiple_choice" && item.feedback.options?.length ? <><p><strong>{item.score === 1 ? "Correct · 1 point" : "Incorrect · 0 points"}</strong></p><p><strong>Options</strong></p><ul>{item.feedback.options.map((option) => <li key={option.id}>{option.id}. {clean(option.text)}{option.id === item.feedback.correct_option ? " — Correct answer" : ""}{option.id === item.feedback.selected_option ? " — Your choice" : ""}</li>)}</ul><p><strong>Correct answer:</strong> {item.feedback.correct_option}. {clean(item.feedback.correct_text ?? "")}</p><p><strong>Your answer:</strong> {clean(item.answer)}</p></> : <><p><strong>Your answer:</strong> {clean(item.answer)}</p><p><strong>Score:</strong> {item.score}/5</p>{item.feedback.correct_answer && <p><strong>Reference answer:</strong> {clean(item.feedback.correct_answer)}</p>}</>}{item.feedback.strengths?.length ? <><strong>Strengths</strong><ul>{item.feedback.strengths.map((text, i) => <li key={i}>{clean(text)}</li>)}</ul></> : null}{item.feedback.improvements?.length ? <><strong>Suggestions</strong><ul>{item.feedback.improvements.map((text, i) => <li key={i}>{clean(text)}</li>)}</ul></> : null}</article>)}
       </div>}

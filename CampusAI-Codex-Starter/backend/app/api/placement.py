@@ -1,16 +1,23 @@
 from datetime import datetime, timezone
+import mimetypes
+from pathlib import Path
+import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from app.db import get_db
+from app.documents.ingest import validate_document
 from app.documents.locking import lock_document_scope
-from app.models import Application, AuditLog, Company, CompanyRequirement, Notification, PlacementDrive, PlacementRecord, ResumeAnalysis, StudentProfile, User
+from app.models import Application, AuditLog, Company, CompanyRequirement, Notification, PlacementDrive, PlacementRecord, StudentProfile, User
 from app.schemas import DriveInput, DriveOutput
 from app.security import get_current_user, require_roles
 from app.eligibility.engine import evaluate_eligibility
+from app.core.config import settings
+from app.upload_scan import MalwareDetected, ScannerUnavailable, scan_upload
 
 router = APIRouter(prefix="/placement-drives", tags=["placement drives"])
 
@@ -34,8 +41,11 @@ def drive_output(drive: PlacementDrive) -> DriveOutput:
     )
 
 
-def persist_application(db: Session, student_user_id: int, drive_id: int) -> Application:
-    application = Application(student_user_id=student_user_id, drive_id=drive_id)
+def persist_application(db: Session, student_user_id: int, drive_id: int,
+                        resume_filename: str | None = None,
+                        resume_storage_path: str | None = None) -> Application:
+    application = Application(student_user_id=student_user_id, drive_id=drive_id,
+                              resume_filename=resume_filename, resume_storage_path=resume_storage_path)
     db.add(application)
     try:
         db.commit()
@@ -141,7 +151,21 @@ def close_drive(drive_id: int, actor: User = Depends(require_roles("placement_of
 
 
 @router.post("/{drive_id}/apply", status_code=201)
-def apply_to_drive(drive_id: int, user: User = Depends(require_roles("student")), db: Session = Depends(get_db)):
+async def apply_to_drive(drive_id: int, resume: UploadFile = File(...),
+                         user: User = Depends(require_roles("student")), db: Session = Depends(get_db)):
+    payload = await resume.read(settings.max_upload_size + 1)
+    original_filename = Path((resume.filename or "resume").replace("\\", "/")).name[:255] or "resume"
+    try:
+        extension = validate_document(original_filename, payload, settings.max_upload_size)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        scan_upload(payload)
+    except MalwareDetected as exc:
+        raise HTTPException(status_code=400, detail="The attached resume failed the malware scan.") from exc
+    except ScannerUnavailable as exc:
+        raise HTTPException(status_code=503, detail="Resume scanning is temporarily unavailable.") from exc
+
     drive = load_application_drive(db, drive_id)
     if not drive:
         raise HTTPException(status_code=404, detail="Open placement drive not found")
@@ -149,9 +173,6 @@ def apply_to_drive(drive_id: int, user: User = Depends(require_roles("student"))
         raise HTTPException(status_code=404, detail="Open placement drive not found")
     if deadline_passed(drive.application_deadline):
         raise HTTPException(status_code=409, detail="The application deadline for this placement drive has passed")
-    resume = db.scalar(select(ResumeAnalysis.id).where(ResumeAnalysis.user_id == user.id).limit(1))
-    if resume is None:
-        raise HTTPException(status_code=409, detail="Upload and analyze your resume before applying to placement drives.")
     rule = drive.company.requirements
     if rule:
         db.execute(select(CompanyRequirement.id).where(CompanyRequirement.id == rule.id).with_for_update())
@@ -179,8 +200,41 @@ def apply_to_drive(drive_id: int, user: User = Depends(require_roles("student"))
     existing = db.scalar(select(Application.id).where(Application.student_user_id == user.id, Application.drive_id == drive.id))
     if existing:
         raise HTTPException(status_code=409, detail="You have already applied")
-    application = persist_application(db, user.id, drive.id)
-    return {"id": application.id, "status": application.status, "drive_id": drive.id}
+    storage_dir = Path(settings.upload_directory).resolve() / "application-resumes"
+    storage_path = storage_dir / f"{uuid.uuid4().hex}{extension}"
+    try:
+        storage_dir.mkdir(parents=True, exist_ok=True)
+        storage_path.write_bytes(payload)
+        application = persist_application(db, user.id, drive.id, original_filename, str(storage_path))
+    except HTTPException:
+        storage_path.unlink(missing_ok=True)
+        raise
+    except OSError as exc:
+        storage_path.unlink(missing_ok=True)
+        db.rollback()
+        raise HTTPException(status_code=503, detail="Could not save the attached resume. Please retry.") from exc
+    except Exception:
+        storage_path.unlink(missing_ok=True)
+        raise
+    return {"id": application.id, "status": application.status, "drive_id": drive.id,
+            "resume_filename": application.resume_filename}
+
+
+@router.get("/applications/{application_id}/resume")
+def download_application_resume(application_id: int,
+                                user: User = Depends(require_roles("student", "placement_officer", "administrator")),
+                                db: Session = Depends(get_db)):
+    application = db.get(Application, application_id)
+    if not application or not application.resume_storage_path or not application.resume_filename:
+        raise HTTPException(status_code=404, detail="Application resume not found")
+    if user.role == "student" and application.student_user_id != user.id:
+        raise HTTPException(status_code=404, detail="Application resume not found")
+    upload_root = (Path(settings.upload_directory).resolve() / "application-resumes").resolve()
+    path = Path(application.resume_storage_path).resolve()
+    if not path.is_relative_to(upload_root) or not path.is_file():
+        raise HTTPException(status_code=404, detail="Application resume not found")
+    return FileResponse(path, filename=application.resume_filename,
+                        media_type=mimetypes.guess_type(application.resume_filename)[0] or "application/octet-stream")
 
 
 @router.patch("/applications/{application_id}/status")

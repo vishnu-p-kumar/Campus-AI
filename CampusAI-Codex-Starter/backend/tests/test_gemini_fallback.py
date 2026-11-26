@@ -4,6 +4,16 @@ from app.ai import gemini
 from app.core.config import settings
 
 
+def test_fallback_candidates_use_current_verified_model_order(monkeypatch):
+    monkeypatch.setattr(settings, "gemini_model", "gemini-3.5-flash-lite")
+    monkeypatch.setattr(settings, "gemini_fallback_models", "gemini-3.1-flash-lite")
+
+    assert gemini._gemini_model_candidates() == [
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
+    ]
+
+
 def test_quota_error_switches_to_next_free_model(monkeypatch):
     monkeypatch.setattr(settings, "gemini_model", "primary-model")
     monkeypatch.setattr(settings, "gemini_fallback_models", "fallback-one,fallback-two")
@@ -98,10 +108,11 @@ def test_all_gemini_409_rate_limited_models_raise_quota_error(monkeypatch):
     assert calls == ["primary-model", "fallback-one"]
 
 
-def test_503_retries_current_model_then_uses_fallback(monkeypatch):
+def test_503_retries_current_model_once_with_backoff_then_uses_fallback(monkeypatch):
     monkeypatch.setattr(settings, "gemini_model", "primary-model")
     monkeypatch.setattr(settings, "gemini_fallback_models", "fallback-one")
-    monkeypatch.setattr(gemini.time, "sleep", lambda _delay: None)
+    delays = []
+    monkeypatch.setattr(gemini.time, "sleep", delays.append)
     calls = []
 
     class TemporarilyUnavailable(Exception):
@@ -121,6 +132,59 @@ def test_503_retries_current_model_then_uses_fallback(monkeypatch):
     assert response.text == "ok"
     assert model == "fallback-one"
     assert calls == ["primary-model", "primary-model", "fallback-one"]
+    assert delays == [2.0]
+
+
+def test_503_retries_fallback_once_then_stops(monkeypatch):
+    monkeypatch.setattr(settings, "gemini_model", "primary-model")
+    monkeypatch.setattr(settings, "gemini_fallback_models", "fallback-one")
+    delays = []
+    monkeypatch.setattr(gemini.time, "sleep", delays.append)
+    calls = []
+
+    class TemporarilyUnavailable(Exception):
+        code = 503
+
+    class Models:
+        def generate_content(self, *, model, contents, config=None):
+            calls.append(model)
+            raise TemporarilyUnavailable()
+
+    try:
+        gemini.generate_content_with_fallback(SimpleNamespace(models=Models()), contents="test")
+        assert False, "Expected the final provider error"
+    except TemporarilyUnavailable:
+        pass
+
+    assert calls == ["primary-model", "primary-model", "fallback-one", "fallback-one"]
+    assert delays == [2.0, 4.0]
+
+
+def test_network_read_timeout_retries_same_model_once(monkeypatch):
+    monkeypatch.setattr(settings, "gemini_model", "primary-model")
+    monkeypatch.setattr(settings, "gemini_fallback_models", "fallback-one")
+    delays = []
+    monkeypatch.setattr(gemini.time, "sleep", delays.append)
+    calls = []
+
+    class ReadTimeout(Exception):
+        pass
+
+    class Models:
+        def generate_content(self, *, model, contents, config=None):
+            calls.append(model)
+            if len(calls) == 1:
+                raise ReadTimeout()
+            return SimpleNamespace(text="ok")
+
+    response, model = gemini.generate_content_with_fallback(
+        SimpleNamespace(models=Models()), contents="test",
+    )
+
+    assert response.text == "ok"
+    assert model == "primary-model"
+    assert calls == ["primary-model", "primary-model"]
+    assert delays == [2.0]
 
 
 def test_504_gateway_timeout_skips_to_the_next_model(monkeypatch):
@@ -139,7 +203,7 @@ def test_504_gateway_timeout_skips_to_the_next_model(monkeypatch):
             return SimpleNamespace(text="ok")
 
     response, model = gemini.generate_content_with_fallback(
-        SimpleNamespace(models=Models()), contents="test", retry_503=False,
+        SimpleNamespace(models=Models()), contents="test", retry_transient_errors=False,
     )
     assert response.text == "ok"
     assert model == "fallback-two"
@@ -164,7 +228,7 @@ def test_fast_interview_fallback_skips_503_retry_and_limits_model_attempts(monke
             return SimpleNamespace(text="ok")
 
     response, model = gemini.generate_content_with_fallback(
-        SimpleNamespace(models=Models()), contents="test", max_models=2, retry_503=False
+        SimpleNamespace(models=Models()), contents="test", max_models=2, retry_transient_errors=False
     )
 
     assert response.text == "ok"

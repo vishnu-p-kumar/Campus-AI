@@ -1,17 +1,20 @@
 import random
 import re
+import logging
 from concurrent.futures import ThreadPoolExecutor
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, HTTPException, Response
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 
 from app.db import get_db
 from app.ai.interview import answer_interview_question, generate_question, review_answer
+from app.ai.gemini import _provider_failure_diagnostic
 from app.models import InterviewResponse, InterviewSession, User
 from app.security import require_roles
 
 router = APIRouter(prefix="/interviews", tags=["interview preparation"])
+logger = logging.getLogger(__name__)
 QUESTIONS = {
     "technical": [
         "Explain how a hash table handles collisions and compare two collision strategies.",
@@ -33,6 +36,56 @@ QUESTION_TOPICS = {
     "aptitude": ["work rates and ratios", "percentage changes", "averages", "basic probability", "distance and speed", "number patterns", "discounts", "combined work rates"],
     "coding": ["arrays and hash maps", "strings and frequency counts", "linked lists", "binary search", "stacks and validation", "graphs and shortest paths", "sets and preserving order", "sorting and interval merging"],
 }
+CURATED_MULTIPLE_CHOICE = {
+    "technical": [
+        ("Which HTTP status code usually indicates that a resource was created successfully?",
+         ["200", "201", "204", "301"], "B"),
+        ("What is the average lookup time for a key in a well-distributed hash table?",
+         ["O(1)", "O(log n)", "O(n)", "O(n log n)"], "A"),
+        ("What does atomicity mean in an ACID database transaction?",
+         ["All operations commit together or none do", "Reads never wait for writes", "Every query uses an index", "Data is copied to every server"], "A"),
+        ("What is a common tradeoff when adding a database index?",
+         ["Reads become impossible", "Reads may get faster, while writes and storage cost more", "The table becomes read-only", "Queries no longer need filters"], "B"),
+        ("What should a unit test primarily verify?",
+         ["The smallest unit of behavior in isolation", "The production network as a whole", "Every screen in a browser", "The database server's uptime"], "A"),
+    ],
+    "hr": [
+        ("A teammate disagrees with your design proposal. What is the best first step?",
+         ["Ask about their concerns and compare evidence against the shared goal", "Escalate immediately without discussion", "Ignore the feedback and ship your proposal", "Ask the team to vote before explaining either option"], "A"),
+        ("You realize a deadline is at risk. What should you do?",
+         ["Wait until the due date to report it", "Tell stakeholders early, explain the risk, and propose priorities", "Hide the unfinished work", "Quietly remove requirements without agreement"], "B"),
+        ("After receiving constructive feedback, what is the strongest response?",
+         ["Clarify the feedback, choose an action, and check whether it helped", "Defend every decision immediately", "Avoid the person who gave it", "Change unrelated work to show activity"], "A"),
+        ("You made an error that affected a teammate's work. What should you do first?",
+         ["Acknowledge it, explain the impact, and help correct it", "Delete the evidence of the error", "Wait for someone else to notice", "Blame unclear requirements without checking"], "A"),
+        ("Two urgent tasks conflict. How should you decide what to do first?",
+         ["Compare impact and deadlines, then align priorities with the owner", "Choose the task that is easiest", "Work on both without telling anyone", "Always choose the task assigned most recently"], "A"),
+    ],
+    "aptitude": [
+        ("A team completes 3/5 of a task in 6 days at a steady rate. How long does the full task take?",
+         ["8 days", "10 days", "12 days", "15 days"], "B"),
+        ("A price of 100 rises by 20%, then falls by 20%. What is the final price?",
+         ["96", "100", "104", "120"], "A"),
+        ("Four numbers have an average of 12. After adding 17, what is the average of all five?",
+         ["12", "13", "14", "15"], "B"),
+        ("A bus travels 90 km in 2 hours at a steady speed. How far does it travel in 5 hours?",
+         ["180 km", "200 km", "225 km", "250 km"], "C"),
+        ("A bag has 3 red balls and 2 blue balls. What is the probability of drawing a blue ball once?",
+         ["1/5", "2/5", "3/5", "1/2"], "B"),
+    ],
+    "coding": [
+        ("Choose the correct output for this code.\n\nCODE_SNIPPET (Python):\nvalues = [2, 4, 6]\nprint(values[1])",
+         ["2", "4", "6", "IndexError"], "B"),
+        ("Choose the correct output for this code.\n\nCODE_SNIPPET (Python):\ntotal = 0\nfor value in [1, 2, 3]:\n    total += value\nprint(total)",
+         ["3", "5", "6", "123"], "C"),
+        ("Choose the correct output for this code.\n\nCODE_SNIPPET (Python):\nitems = [1, 1, 2]\nprint(len(set(items)))",
+         ["1", "2", "3", "Error"], "B"),
+        ("Choose the correct output for this code.\n\nCODE_SNIPPET (Python):\nn = 9\nprint(n // 2)",
+         ["4", "4.5", "5", "9"], "A"),
+        ("What is the time complexity of this code?\n\nCODE_SNIPPET (Python):\nfor value in values:\n    print(value)",
+         ["O(1)", "O(log n)", "O(n)", "O(n²)"], "C"),
+    ],
+}
 DIFFICULTIES = ("easy", "medium", "difficult")
 
 
@@ -51,7 +104,10 @@ def _make_question(category: str, language: str, focus: str | None, question_typ
     except Exception:
         generated = None
     if question_type == "multiple_choice":
-        return _multiple_choice_data(generated), "gemini" if generated else "curated-question-bank"
+        validated = _multiple_choice_data(generated)
+        if validated:
+            return validated, "gemini"
+        return _curated_multiple_choice(category, index, previous_questions), "curated-question-bank"
     if isinstance(generated, dict):
         question = generated.get("question")
         reference_answer = generated.get("reference_answer")
@@ -139,10 +195,10 @@ RUBRIC_SIGNALS = {
 
 
 class SessionInput(BaseModel):
-    category: str = Field(pattern="^(technical|hr|aptitude|coding)$")
+    category: str = Field(default="aptitude", pattern="^(technical|hr|aptitude|coding)$")
     language: str = Field(default="en", pattern="^(en|hi|kn)$")
     focus: str | None = Field(default=None, max_length=2000)
-    question_type: str = Field(default="typed", pattern="^(typed|multiple_choice)$")
+    question_type: str = Field(default="multiple_choice", pattern="^(typed|multiple_choice)$")
     question_limit: int = Field(default=5, ge=1, le=20)
 
 
@@ -161,10 +217,43 @@ class AskInput(BaseModel):
 def ask_interview_question(data: AskInput, user: User = Depends(require_roles("student"))):
     try:
         answer = answer_interview_question(data.question.strip(), data.focus, data.language)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail="Interview AI is unavailable. Check its configuration and try again later.") from exc
     except Exception as exc:
-        raise HTTPException(status_code=503, detail="Interview AI could not answer right now. Try again later.") from exc
+        if isinstance(exc, RuntimeError) and "not configured" in str(exc).casefold():
+            logger.error("Interview tutor unavailable; category=configuration_missing setting=GEMINI_CHAT_API_KEY")
+            raise HTTPException(
+                status_code=503,
+                detail="Interview AI is not configured. Contact the administrator.",
+            ) from None
+
+        category, status_code = _provider_failure_diagnostic(exc)
+        logger.warning(
+            "Interview tutor unavailable; category=%s status_code=%s exception_type=%s",
+            category,
+            status_code if status_code is not None else "unknown",
+            type(exc).__name__,
+        )
+        if status_code in {503, 504}:
+            raise HTTPException(
+                status_code=503,
+                detail="Gemini is temporarily overloaded or timed out. Try the interview answer again shortly.",
+                headers={"Retry-After": "15"},
+            ) from None
+        if status_code == 429 or category in {"quota_or_rate_limited", "quota_exhausted", "rate_limited"}:
+            raise HTTPException(
+                status_code=503,
+                detail="Gemini request limits are currently reached. Check the Gemini project limits, then retry.",
+                headers={"Retry-After": "60"},
+            ) from None
+        if category in {"invalid_api_key", "expired_api_key", "unauthenticated", "permission_denied", "api_not_enabled", "billing_not_enabled", "model_not_found", "model_or_endpoint_not_found"}:
+            raise HTTPException(
+                status_code=503,
+                detail="Interview AI configuration needs administrator attention.",
+            ) from None
+        raise HTTPException(
+            status_code=503,
+            detail="Interview AI could not answer right now. Try again later.",
+            headers={"Retry-After": "15"},
+        ) from None
     return {"answer": answer, "generation_mode": "assistant"}
 
 
@@ -186,17 +275,29 @@ def _multiple_choice_data(value):
     return question, choices, correct
 
 
+def _curated_multiple_choice(category: str, index: int, previous_questions: list[str]):
+    """Provide a validated local MCQ when Gemini is unavailable or returns malformed data."""
+    bank = CURATED_MULTIPLE_CHOICE[category]
+    asked = {item.strip().casefold() for item in previous_questions}
+    candidates = [item for item in bank if item[0].strip().casefold() not in asked]
+    if not candidates:
+        candidates = bank
+    preferred = bank[index % len(bank)]
+    question, texts, correct = preferred if preferred in candidates else candidates[0]
+    return question, [{"id": chr(ord("A") + offset), "text": text} for offset, text in enumerate(texts)], correct
+
+
 @router.post("/sessions", status_code=201)
 def create_session(data: SessionInput, user: User = Depends(require_roles("student")), db: Session = Depends(get_db)):
     focus = data.focus.strip() if data.focus and data.focus.strip() else None
-    question_type = "multiple_choice" if data.category == "coding" else data.question_type
+    question_type = "multiple_choice" if data.category in {"aptitude", "coding"} else data.question_type
     question, mode = _make_question(data.category, data.language, focus, question_type, 0, data.question_limit, [])
     options, correct_option = [], None
     reference_answer = None
     if question_type == "multiple_choice":
         mcq = question
         if not mcq:
-            raise HTTPException(status_code=503, detail="The question service could not create a multiple-choice question. Check model access and free-tier availability, then retry or choose typed-answer mode.")
+            raise HTTPException(status_code=503, detail="The question service could not create a multiple-choice question. Check model access and free-tier availability, then retry or choose another interview category.")
         question, options, correct_option = mcq
     elif isinstance(question, dict):
         reference_answer = question["reference_answer"]
@@ -443,3 +544,18 @@ def history_detail(session_id: int, user: User = Depends(require_roles("student"
             "focus": session.focus, "question_type": session.question_type, "question_limit": session.question_limit,
             "status": session.status, "average_score": session.score, "answered_count": len(results),
             "results": results}
+
+
+@router.delete("/history/{session_id}", status_code=204)
+def delete_history(session_id: int, user: User = Depends(require_roles("student")), db: Session = Depends(get_db)):
+    session = db.scalar(select(InterviewSession).where(
+        InterviewSession.id == session_id, InterviewSession.user_id == user.id,
+    ))
+    if not session:
+        raise HTTPException(status_code=404, detail="Practice session not found")
+    # Explicit child deletion keeps local SQLite behavior aligned with PostgreSQL
+    # even when SQLite foreign-key enforcement is disabled.
+    db.execute(delete(InterviewResponse).where(InterviewResponse.session_id == session.id))
+    db.delete(session)
+    db.commit()
+    return Response(status_code=204)

@@ -45,7 +45,10 @@ def test_production_configuration_rejects_insecure_defaults():
 def test_development_configuration_keeps_local_defaults():
     config = Settings(_env_file=None)
     validate_production_configuration(config)
-    assert config.allowed_origins == ["http://localhost:3000", "http://127.0.0.1:3000"]
+    default_origins = Settings.model_fields["cors_origins"].default
+    assert default_origins == "http://localhost:3000,http://127.0.0.1:3000"
+    isolated = Settings(_env_file=None, cors_origins=default_origins)
+    assert isolated.allowed_origins == ["http://localhost:3000", "http://127.0.0.1:3000"]
 
 
 def test_readiness_reports_optional_vector_and_scanner_services(client, monkeypatch):

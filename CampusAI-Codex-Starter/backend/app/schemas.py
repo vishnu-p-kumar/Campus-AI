@@ -67,6 +67,15 @@ class StudentProfileInput(BaseModel):
     projects: list[str] = Field(default_factory=list, max_length=100)
 
 
+class StudentPortfolioInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    technical_skills: list[str] | None = Field(default=None, max_length=100)
+    soft_skills: list[str] | None = Field(default=None, max_length=100)
+    certifications: list[str] | None = Field(default=None, max_length=100)
+    projects: list[str] | None = Field(default=None, max_length=100)
+
+
 class StudentProfileOutput(StudentProfileInput):
     id: int
     user_id: int
@@ -181,17 +190,14 @@ class ChatInput(BaseModel):
     document_version: int | None = Field(default=None, ge=1)
 
 
-class AuthorizedUrlInput(BaseModel):
-    url: str = Field(min_length=8, max_length=2048)
-
-
-class PlacementWebSearchSettingInput(BaseModel):
-    enabled: bool
-
-
 class ChatOutput(BaseModel):
     conversation_id: int
     answer: str
+    route: str = "other"
+    queries_used: int = 0
+    daily_query_limit: int = 25
+    queries_remaining: int = 25
+    reset_date: str | None = None
     confidence: float
     confidence_label: str
     evidence_minimum_score: float

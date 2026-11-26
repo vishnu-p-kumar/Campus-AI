@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
-const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000").replace(/\/$/, "");
+export const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000").replace(/\/$/, "");
 
 async function fetchCampusApi(url: string, init?: RequestInit): Promise<Response> {
   try {
@@ -21,6 +21,7 @@ type AuthContextValue = {
   user: User | null;
   loading: boolean;
   api: <T>(path: string, init?: RequestInit) => Promise<T>;
+  download: (path: string) => Promise<Blob>;
   login: (email: string, password: string) => Promise<User>;
   register: (fullName: string, email: string, password: string) => Promise<User>;
   logout: () => Promise<void>;
@@ -87,6 +88,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return parseResponse<T>(response);
   }, [accessToken, refresh]);
 
+  const download = useCallback(async (path: string): Promise<Blob> => {
+    const send = (token: string | null) => fetchCampusApi(`${API_BASE}${path}`, {
+      credentials: "include", headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    let response = await send(accessToken);
+    if (response.status === 401 && accessToken) {
+      try { const session = await refresh(); response = await send(session.access_token); } catch { /* Preserve original response. */ }
+    }
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      const detail = body?.detail;
+      throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail ?? `Request failed (${response.status})`));
+    }
+    return response.blob();
+  }, [accessToken, refresh]);
+
   const login = useCallback(async (email: string, password: string) => {
     const response = await fetchCampusApi(`${API_BASE}/api/v1/auth/login`, {
       method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
@@ -115,7 +132,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
   }, []);
 
-  const value = useMemo(() => ({ user, loading, api, login, register, logout }), [user, loading, api, login, register, logout]);
+  const value = useMemo(() => ({ user, loading, api, download, login, register, logout }), [user, loading, api, download, login, register, logout]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

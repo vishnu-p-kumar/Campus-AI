@@ -45,3 +45,31 @@ def test_students_cannot_create_or_edit_student_records(client, db_session):
     assert client.post("/api/v1/admin/students", headers=headers, json={}).status_code == 403
     assert client.put("/api/v1/admin/students/1", headers=headers, json={"cgpa": 9}).status_code == 403
     assert client.put("/api/v1/students/me", headers=headers, json={"cgpa": 9}).status_code == 403
+
+
+def test_student_can_update_portfolio_but_not_academic_details(client, db_session):
+    student = User(email="portfolio-edit@example.edu", full_name="Portfolio Student",
+                   password_hash=hash_password("student-password"), role="student")
+    student.student_profile = StudentProfile(cgpa=8.2, technical_skills=["Old skill"])
+    db_session.add(student)
+    db_session.commit()
+    response = client.post("/api/v1/auth/login", json={"email": student.email, "password": "student-password"})
+    headers = {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+    saved = client.patch("/api/v1/students/me/portfolio", headers=headers, json={
+        "technical_skills": [" Python ", "Python", "SQL", ""],
+        "soft_skills": ["Communication"],
+        "certifications": ["Cloud Fundamentals"],
+        "projects": ["CampusAI"]
+    })
+    assert saved.status_code == 200
+    profile = saved.json()
+    assert profile["technical_skills"] == ["Python", "SQL"]
+    assert profile["soft_skills"] == ["Communication"]
+    assert profile["certifications"] == ["Cloud Fundamentals"]
+    assert profile["projects"] == ["CampusAI"]
+    assert profile["cgpa"] == 8.2
+
+    forbidden = client.patch("/api/v1/students/me/portfolio", headers=headers, json={"cgpa": 10})
+    assert forbidden.status_code == 422
+    assert db_session.get(StudentProfile, student.student_profile.id).cgpa == 8.2

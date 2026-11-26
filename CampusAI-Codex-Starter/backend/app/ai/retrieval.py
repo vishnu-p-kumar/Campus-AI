@@ -4,7 +4,7 @@ import math
 import re
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models import Document, DocumentChunk
@@ -21,11 +21,32 @@ MULTILINGUAL_TERMS = {
     "ನಿಯಮ": "policy rules", "ಪ್ಲೇಸ್ಮೆಂಟ್": "placement", "ಕಂಪನಿ": "company", "ಅರ್ಜಿ": "application", "ಡ್ರೈವ್": "drive",
 }
 _CONFIDENCE_STOPWORDS = {
-    "a", "an", "and", "are", "as", "at", "be", "by", "can", "do", "for", "from", "how", "i", "in",
+    "a", "an", "and", "are", "as", "at", "about", "according", "be", "by", "can", "does", "did", "do", "for", "from", "how", "i", "in",
     "is", "it", "me", "my", "of", "on", "or", "our", "please", "should", "that", "the", "their", "them",
     "these", "this", "those", "to", "was", "what", "when", "where", "which", "who", "why", "will", "with",
+    "details", "detail", "information", "member", "members", "tell", "give",
     "would", "you", "your", "all", "list", "listed", "listing",
+    "document", "documents", "happen", "happens", "next", "named", "mention", "mentions", "mentioned",
+    "specifically", "student", "students", "include", "includes", "included", "describe", "describes",
 }
+
+_SEARCH_TERM_ALIASES = {
+    "application": "apply", "applications": "apply", "applicant": "apply", "applicants": "apply",
+    "applied": "apply", "applying": "apply",
+    "faculty": "faculty", "professor": "faculty", "lecturer": "faculty", "instructor": "faculty",
+}
+
+
+def normalize_search_term(term: str) -> str:
+    """Normalize common placement-query variants without stemming identifiers."""
+    term = term.casefold()
+    if term in _SEARCH_TERM_ALIASES:
+        return _SEARCH_TERM_ALIASES[term]
+    if len(term) > 4 and term.endswith("ies"):
+        return term[:-3] + "y"
+    if len(term) > 4 and term.endswith("s"):
+        return term[:-1]
+    return term
 
 
 def tokenize(text: str) -> list[str]:
@@ -33,7 +54,8 @@ def tokenize(text: str) -> list[str]:
     for term, english in MULTILINGUAL_TERMS.items():
         if term in expanded:
             expanded += " " + english
-    return re.findall(r"[a-z0-9]+", expanded)
+    return [normalized for token in re.findall(r"[a-z0-9]+", expanded)
+            if (normalized := normalize_search_term(token))]
 
 
 def retrieve(db: Session, query: str, as_of: datetime | None = None, limit: int = 6, category: str | None = None,
@@ -48,7 +70,9 @@ def retrieve(db: Session, query: str, as_of: datetime | None = None, limit: int 
     if category:
         stmt = stmt.where(Document.category == category)
     if company_id is not None:
-        stmt = stmt.where(Document.company_id == company_id)
+        # Keep institution-wide uploads in scope for company questions. Admins
+        # often upload a company document before associating it with a profile.
+        stmt = stmt.where(or_(Document.company_id == company_id, Document.company_id.is_(None)))
     if academic_year:
         stmt = stmt.where(Document.academic_year == academic_year)
     if version is not None:
@@ -199,7 +223,10 @@ def retrieve_dense(query: str, as_of: datetime | None = None, limit: int = 8, ca
         if category:
             conditions.append(qm.FieldCondition(key="category", match=qm.MatchValue(value=category)))
         if company_id is not None:
-            conditions.append(qm.FieldCondition(key="company_id", match=qm.MatchValue(value=company_id)))
+            conditions.append(qm.Filter(should=[
+                qm.FieldCondition(key="company_id", match=qm.MatchValue(value=company_id)),
+                qm.IsEmptyCondition(is_empty=qm.PayloadField(key="company_id")),
+            ]))
         if academic_year:
             conditions.append(qm.FieldCondition(key="academic_year", match=qm.MatchValue(value=academic_year)))
         if version is not None:
@@ -246,7 +273,7 @@ def hybrid_retrieve(db: Session, query: str, as_of: datetime | None = None, limi
     if category:
         stmt = stmt.where(Document.category == category)
     if company_id is not None:
-        stmt = stmt.where(Document.company_id == company_id)
+        stmt = stmt.where(or_(Document.company_id == company_id, Document.company_id.is_(None)))
     if academic_year:
         stmt = stmt.where(Document.academic_year == academic_year)
     if version is not None:
@@ -307,16 +334,25 @@ def reciprocal_rank_fusion(*rankings: list[dict], limit: int = 8, k: int = 60) -
 def confidence_features(query: str, sources: list[dict]) -> dict:
     minimum_score = settings.evidence_minimum_score
     def meaningful_terms(text: str) -> set[str]:
-        terms = set(tokenize(text)) - _CONFIDENCE_STOPWORDS
-        normalized = set()
-        for term in terms:
-            if len(term) > 4 and term.endswith("ies"):
-                normalized.add(term[:-3] + "y")
-            elif len(term) > 4 and term.endswith("s"):
-                normalized.add(term[:-1])
-            else:
-                normalized.add(term)
-        return normalized
+        tokens = tokenize(text)
+        uppercase_tokens = {
+            token.casefold() for token in re.findall(r"[A-Za-z0-9]+", text)
+            if token.isupper()
+        }
+        terms = {normalized for token in tokens
+                 if (normalized := (token if token in uppercase_tokens else normalize_search_term(token)))}
+        terms -= _CONFIDENCE_STOPWORDS
+        acronym_components: set[str] = set()
+        for index in range(len(tokens) - 1):
+            left, right = tokens[index:index + 2]
+            if (left in uppercase_tokens and right in uppercase_tokens
+                    and len(left) <= 3 and len(right) <= 4):
+                terms.add(left + right)
+                acronym_components.update((left, right))
+        # Treat split and unspaced spellings of an acronym as the same entity
+        # instead of counting each fragment as a separate evidence requirement.
+        terms.difference_update(acronym_components)
+        return terms
 
     terms = meaningful_terms(query)
     if not terms or not sources:
@@ -332,10 +368,21 @@ def confidence_features(query: str, sources: list[dict]) -> dict:
     )
     coverage = len(terms & evidence_terms) / max(len(terms), 1)
     if coverage == 0:
+        # A high cosine match can find relevant passages even when the
+        # student's wording uses different terms from the admin's document.
+        # Keep this as partial evidence so the answer model must stay grounded.
+        dense_score = max((float(source.get("dense_score") or 0.0) for source in sources), default=0.0)
+        if dense_score >= 0.72:
+            return {"score": round(min(1.0, max(minimum_score, dense_score * 0.65)), 3),
+                    "label": "partial", "coverage": 0.0,
+                    "minimum_score_threshold": minimum_score}
         return {"score": 0.0, "label": "unsupported", "coverage": 0.0,
                 "minimum_score_threshold": minimum_score}
     source_count = len({source["document_id"] for source in sources})
-    top = float(sources[0].get("lexical_score", 0.0))
+    top = max(
+        max((float(source.get("lexical_score") or 0.0) for source in sources), default=0.0),
+        max((float(source.get("dense_score") or 0.0) for source in sources), default=0.0),
+    )
     score = min(1.0, coverage * 0.65 + min(source_count, 2) * 0.1 + min(top, 1.0) * 0.15)
     label = ("weak" if score < minimum_score else
              "supported" if score >= 0.62 and coverage >= 0.45 else "partial")

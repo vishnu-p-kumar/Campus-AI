@@ -1,13 +1,10 @@
 from datetime import datetime, timezone
-import ipaddress
 import logging
 from pathlib import Path
 import uuid
-from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai.retrieval import index_chunks
@@ -16,129 +13,13 @@ from app.db import get_db
 from app.documents.ingest import chunk_pages, extract_pages, validate_document
 from app.documents.locking import lock_document_scope
 from app.documents.metadata import suggest_document_metadata
-from app.models import (AuditLog, AuthorizedSourceDomain, AuthorizedSourceUrl, Company, Document, DocumentChunk,
-                        DocumentIngestionJob, PlacementAssistantSetting, User)
-from app.schemas import AuthorizedUrlInput, PlacementWebSearchSettingInput
+from app.models import AuditLog, Company, Document, DocumentChunk, DocumentIngestionJob, User
 from app.security import require_roles
 from app.upload_scan import MalwareDetected, ScannerUnavailable, scan_upload
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 logger = logging.getLogger(__name__)
 DOCUMENT_CATEGORIES = {"placement-policy", "company-eligibility", "placement-calendar", "student-handbook", "resume-guidelines", "interview-guidelines", "training-materials", "general"}
-
-
-def _canonical_authorized_url(value: str) -> tuple[str, str]:
-    try:
-        parsed = urlsplit(value.strip())
-        host = parsed.hostname
-        port = parsed.port
-        if parsed.scheme.casefold() != "https" or not host or parsed.username or parsed.password or port not in (None, 443):
-            raise ValueError
-        domain = host.encode("idna").decode("ascii").casefold().rstrip(".").removeprefix("www.")
-        if "." not in domain or domain == "localhost" or domain.endswith((".localhost", ".local")):
-            raise ValueError
-        try:
-            ipaddress.ip_address(domain)
-        except ValueError:
-            pass
-        else:
-            raise ValueError
-        if any(not label or len(label) > 63 or label.startswith("-") or label.endswith("-")
-               or not all(char.isalnum() or char == "-" for char in label)
-               for label in domain.split(".")):
-            raise ValueError
-        if parsed.query or parsed.fragment:
-            raise ValueError
-        url_host = host.encode("idna").decode("ascii").casefold().rstrip(".")
-        return f"https://{url_host}{parsed.path or '/'}", domain
-    except (UnicodeError, ValueError, AttributeError) as exc:
-        raise HTTPException(status_code=422, detail="Enter a public HTTPS URL with a valid domain name.") from exc
-
-
-def _url_context_state(db: Session) -> dict:
-    row = db.get(PlacementAssistantSetting, 1)
-    urls = db.scalars(select(AuthorizedSourceUrl).order_by(AuthorizedSourceUrl.url)).all()
-    requested_enabled = bool(row and row.url_context_enabled)
-    key_configured = bool(settings.gemini_placement_api_key)
-    server_enabled = settings.gemini_url_context_enabled
-    return {
-        "enabled": requested_enabled,
-        "active": requested_enabled and server_enabled and key_configured and bool(urls),
-        "server_enabled": server_enabled,
-        "key_configured": key_configured,
-        "urls": [{"id": item.id, "domain": db.get(AuthorizedSourceDomain, item.domain_id).domain,
-                  "url": item.url, "created_at": item.created_at} for item in urls],
-    }
-
-
-@router.get("/authorized-sources")
-def list_authorized_sources(_: User = Depends(require_roles("administrator")), db: Session = Depends(get_db)):
-    return _url_context_state(db)
-
-
-@router.post("/authorized-sources", status_code=201)
-def add_authorized_source(data: AuthorizedUrlInput, actor: User = Depends(require_roles("administrator")),
-                          db: Session = Depends(get_db)):
-    url, domain = _canonical_authorized_url(data.url)
-    if db.scalar(select(AuthorizedSourceUrl.id).where(AuthorizedSourceUrl.url == url)):
-        raise HTTPException(status_code=409, detail="That URL is already authorized.")
-    if (db.scalar(select(func.count(AuthorizedSourceUrl.id))) or 0) >= 20:
-        raise HTTPException(status_code=409, detail="Gemini URL Context supports up to 20 authorized URLs.")
-    domain_item = db.scalar(select(AuthorizedSourceDomain).where(AuthorizedSourceDomain.domain == domain))
-    if domain_item is None:
-        domain_item = AuthorizedSourceDomain(domain=domain, added_by=actor.id)
-        db.add(domain_item)
-        db.flush()
-    item = AuthorizedSourceUrl(url=url, domain_id=domain_item.id, added_by=actor.id)
-    db.add(item)
-    db.add(AuditLog(actor_user_id=actor.id, action="placement.url_context.add", resource_type="authorized_source_url",
-                    resource_id=url[:80], details={"url": url, "domain": domain}))
-    try:
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(status_code=409, detail="That URL is already authorized.") from exc
-    db.refresh(item)
-    return {"id": item.id, "domain": domain, "url": item.url, "created_at": item.created_at}
-
-
-@router.delete("/authorized-sources/{source_id}", status_code=204)
-def remove_authorized_source(source_id: int, actor: User = Depends(require_roles("administrator")),
-                             db: Session = Depends(get_db)):
-    item = db.get(AuthorizedSourceUrl, source_id)
-    if not item:
-        raise HTTPException(status_code=404, detail="Authorized URL not found.")
-    domain = db.get(AuthorizedSourceDomain, item.domain_id)
-    db.add(AuditLog(actor_user_id=actor.id, action="placement.url_context.remove", resource_type="authorized_source_url",
-                    resource_id=item.url[:80], details={"url": item.url}))
-    db.delete(item)
-    db.flush()
-    if domain and not db.scalar(select(AuthorizedSourceUrl.id).where(AuthorizedSourceUrl.domain_id == domain.id)):
-        db.delete(domain)
-    db.commit()
-
-
-@router.put("/authorized-sources/settings")
-def update_placement_web_search(data: PlacementWebSearchSettingInput,
-                                actor: User = Depends(require_roles("administrator")), db: Session = Depends(get_db)):
-    urls = db.scalars(select(AuthorizedSourceUrl.id)).all()
-    if data.enabled and not settings.gemini_url_context_enabled:
-        raise HTTPException(status_code=409, detail="URL Context is disabled by the server setting GEMINI_URL_CONTEXT_ENABLED.")
-    if data.enabled and not settings.gemini_placement_api_key:
-        raise HTTPException(status_code=409, detail="Set GEMINI_PLACEMENT_API_KEY before enabling URL Context.")
-    if data.enabled and not urls:
-        raise HTTPException(status_code=409, detail="Add at least one authorized URL before enabling URL Context.")
-    row = db.get(PlacementAssistantSetting, 1)
-    if row is None:
-        row = PlacementAssistantSetting(id=1, url_context_enabled=data.enabled, updated_by=actor.id)
-        db.add(row)
-    else:
-        row.url_context_enabled = data.enabled
-        row.updated_by = actor.id
-    db.add(AuditLog(actor_user_id=actor.id, action="placement.url_context.toggle", resource_type="placement_assistant",
-                    resource_id="url_context", details={"enabled": data.enabled}))
-    db.commit()
-    return _url_context_state(db)
 
 
 def _log_vector_index_failure(stage: str, exc: Exception) -> None:

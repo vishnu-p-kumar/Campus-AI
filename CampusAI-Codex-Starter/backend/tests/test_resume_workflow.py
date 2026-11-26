@@ -4,7 +4,79 @@ from app.upload_scan import MalwareDetected
 from sqlalchemy import select
 
 
-def test_resume_summary_and_persisted_skill_gap(client, monkeypatch):
+def test_resume_history_delete_routes_are_registered_and_reject_anonymous_requests(client):
+    routes = client.get("/openapi.json").json()["paths"]
+    assert "delete" in routes["/api/v1/resumes/history"]
+    assert "delete" in routes["/api/v1/resumes/history/{analysis_id}"]
+    assert "delete" in routes["/api/v1/resumes/skill-gap/history/{gap_id}"]
+
+    for path in (
+        "/api/v1/resumes/history",
+        "/api/v1/resumes/history/49",
+        "/api/v1/resumes/skill-gap/history/56",
+    ):
+        response = client.delete(path)
+        assert response.status_code == 401, (path, response.status_code, response.text)
+
+
+def test_student_can_delete_one_resume_or_skill_history_entry_independently(client, db_session):
+    register = client.post("/api/v1/auth/register", json={
+        "email": "resume-delete@example.edu", "full_name": "Resume Delete", "password": "correct horse battery",
+    })
+    headers = {"Authorization": f"Bearer {register.json()['access_token']}"}
+    user = db_session.scalar(select(User).where(User.email == "resume-delete@example.edu"))
+    resume = ResumeAnalysis(user_id=user.id, filename="delete-me.txt", skills=["Python"])
+    db_session.add(resume)
+    db_session.flush()
+    gap = SkillGapAnalysis(user_id=user.id, resume_analysis_id=resume.id, job_title="Backend Developer",
+                          job_description_hash="a" * 64, required_skills=["Python"], matching_skills=["Python"])
+    db_session.add(gap)
+    db_session.commit()
+    resume_id, gap_id = resume.id, gap.id
+
+    deleted_resume = client.delete(f"/api/v1/resumes/history/{resume_id}", headers=headers)
+    assert deleted_resume.status_code == 204
+    assert client.get("/api/v1/resumes/history", headers=headers).json() == []
+    remaining_gaps = client.get("/api/v1/resumes/skill-gap/history", headers=headers).json()
+    assert len(remaining_gaps) == 1 and remaining_gaps[0]["resume_analysis_id"] is None
+
+    deleted_gap = client.delete(f"/api/v1/resumes/skill-gap/history/{gap_id}", headers=headers)
+    assert deleted_gap.status_code == 204
+    assert client.get("/api/v1/resumes/skill-gap/history", headers=headers).json() == []
+    assert client.delete(f"/api/v1/resumes/history/{resume_id}", headers=headers).status_code == 404
+
+
+def test_student_can_clear_all_resume_and_skill_history_without_affecting_another_student(client, db_session):
+    first = client.post("/api/v1/auth/register", json={
+        "email": "resume-clear@example.edu", "full_name": "Resume Clear", "password": "correct horse battery",
+    })
+    second = client.post("/api/v1/auth/register", json={
+        "email": "resume-keep@example.edu", "full_name": "Resume Keep", "password": "correct horse battery",
+    })
+    headers = {"Authorization": f"Bearer {first.json()['access_token']}"}
+    other_headers = {"Authorization": f"Bearer {second.json()['access_token']}"}
+    first_user = db_session.scalar(select(User).where(User.email == "resume-clear@example.edu"))
+    second_user = db_session.scalar(select(User).where(User.email == "resume-keep@example.edu"))
+    first_resume = ResumeAnalysis(user_id=first_user.id, filename="first.txt")
+    second_resume = ResumeAnalysis(user_id=second_user.id, filename="keep.txt")
+    db_session.add_all([first_resume, second_resume])
+    db_session.flush()
+    db_session.add_all([
+        SkillGapAnalysis(user_id=first_user.id, resume_analysis_id=first_resume.id, job_title="Analyst", job_description_hash="a" * 64),
+        SkillGapAnalysis(user_id=second_user.id, resume_analysis_id=second_resume.id, job_title="Engineer", job_description_hash="b" * 64),
+    ])
+    db_session.commit()
+
+    response = client.delete("/api/v1/resumes/history", headers=headers)
+
+    assert response.status_code == 204
+    assert client.get("/api/v1/resumes/history", headers=headers).json() == []
+    assert client.get("/api/v1/resumes/skill-gap/history", headers=headers).json() == []
+    assert [item["filename"] for item in client.get("/api/v1/resumes/history", headers=other_headers).json()] == ["keep.txt"]
+    assert [item["job_title"] for item in client.get("/api/v1/resumes/skill-gap/history", headers=other_headers).json()] == ["Engineer"]
+
+
+def test_resume_review_and_skill_comparison_are_generated_and_saved_separately(client, monkeypatch):
     resume_review = {"summary": "A Python developer with a data-analysis project.", "strengths": ["Built a Python project."],
                      "improvement_areas": [{"section": "Projects", "current_excerpt": "Built a Python data analysis app.",
                                             "recommendation": "Add a measurable outcome if available.", "changes_to_make": ["Add a verified outcome."]}],
@@ -35,10 +107,11 @@ def test_resume_summary_and_persisted_skill_gap(client, monkeypatch):
     assert parsed.json()["ai_review"]["summary"] == resume_review["summary"]
     assert "extracted_sections" not in parsed.json()["ai_review"]
     assert parsed.json()["ai_status"] == "complete"
-    assert parsed.json()["role_comparison"]["matching_skills"] == ["Python", "SQL"]
     assert "Built a Python data analysis app" in analysis_inputs[0][0]
-    assert analysis_inputs[0][1:] == ("Data Engineer", "We need Python, SQL, Docker and PostgreSQL skills for data services.")
-    assert parsed.json()["privacy"].startswith("The uploaded files and full resume text are not saved")
+    assert analysis_inputs[0][1:] == ()
+    assert "role_comparison" not in parsed.json()
+    assert parsed.json()["privacy"].startswith("The uploaded file and full resume text are not saved")
+    assert client.get("/api/v1/resumes/skill-gap/history", headers=headers).json() == []
 
     gap = client.post("/api/v1/resumes/skill-gap", headers=headers, json={"job_title": "Data Engineer", "job_description": "We need Python, SQL, Docker, and PostgreSQL skills to build data services."})
     assert gap.status_code == 200, gap.text
@@ -49,9 +122,24 @@ def test_resume_summary_and_persisted_skill_gap(client, monkeypatch):
     assert history.status_code == 200 and history.json()[0]["job_title"] == "Data Engineer"
     assert history.json()[0]["ai_guidance"] == skill_guidance
     assert history.json()[0]["ai_status"] == "complete"
+
+    compared = client.post("/api/v1/resumes/skill-gap/compare", headers=headers,
+                           data={"resume_analysis_id": str(parsed.json()["id"]), "job_title": "Backend Developer",
+                                 "job_description": "Build and maintain Python backend services and APIs."})
+    assert compared.status_code == 200, compared.text
+    history = client.get("/api/v1/resumes/skill-gap/history", headers=headers)
+    assert [item["job_title"] for item in history.json()] == ["Backend Developer", "Data Engineer"]
+    assert all(item["resume_analysis_id"] == parsed.json()["id"] for item in history.json())
+
+    resume_history = client.get("/api/v1/resumes/history", headers=headers)
+    assert resume_history.status_code == 200
+    assert len(resume_history.json()) == 1
+    assert resume_history.json()[0]["id"] == parsed.json()["id"]
+    assert "role_comparison" not in resume_history.json()[0]
     latest = client.get("/api/v1/resumes/latest", headers=headers)
     assert latest.json()["ai_review"]["summary"] == resume_review["summary"]
     assert latest.json()["ai_status"] == "complete"
+    assert "role_comparison" not in latest.json()
 
 
 def test_resume_upload_rejects_infected_content_before_analysis(client, monkeypatch):
@@ -116,6 +204,52 @@ def test_resume_ai_failure_does_not_save_local_analysis(client, monkeypatch):
     assert latest.json() == {"analysis": None}
 
 
+def test_resume_provider_overload_returns_actionable_message_and_retry_after(client, monkeypatch):
+    register = client.post("/api/v1/auth/register", json={
+        "email": "resume-provider-overload@example.edu",
+        "full_name": "Resume User",
+        "password": "correct horse battery",
+    })
+    headers = {"Authorization": f"Bearer {register.json()['access_token']}"}
+    monkeypatch.setattr(resumes_api.settings, "gemini_api_key", "configured-test-key")
+
+    def unavailable(*_args):
+        raise resumes_api.GeminiGenerationError(
+            "provider unavailable", category="provider_server_error", status_code=503,
+        )
+
+    monkeypatch.setattr(resumes_api, "analyze_resume_text", unavailable)
+    response = client.post("/api/v1/resumes/analyze", headers=headers,
+                           files={"file": ("resume.txt", b"Student. Skills: Python. Project: Python API.", "text/plain")})
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "15"
+    assert "Gemini is temporarily overloaded" in response.json()["detail"]
+    assert "was not saved" in response.json()["detail"]
+    assert client.get("/api/v1/resumes/latest", headers=headers).json() == {"analysis": None}
+
+
+def test_resume_generation_network_error_explains_required_backend_egress(client, monkeypatch):
+    register = client.post("/api/v1/auth/register", json={
+        "email": "resume-network-error@example.edu",
+        "full_name": "Resume User",
+        "password": "correct horse battery",
+    })
+    headers = {"Authorization": f"Bearer {register.json()['access_token']}"}
+    monkeypatch.setattr(resumes_api.settings, "gemini_api_key", "configured-test-key")
+    monkeypatch.setattr(resumes_api, "analyze_resume_text", lambda *_args: (_ for _ in ()).throw(
+        resumes_api.GeminiGenerationError("network unavailable", category="network_connectivity")
+    ))
+
+    response = client.post("/api/v1/resumes/analyze", headers=headers,
+                           files={"file": ("resume.txt", b"Skills: Python. Project: Built an API.", "text/plain")})
+
+    assert response.status_code == 503
+    assert "outbound HTTPS" in response.json()["detail"]
+    assert "generativelanguage.googleapis.com:443" in response.json()["detail"]
+    assert response.json()["detail"].endswith("Your result was not saved.")
+    assert client.get("/api/v1/resumes/latest", headers=headers).json() == {"analysis": None}
+
+
 def test_resume_analysis_requires_configured_ai_key(client, monkeypatch):
     register = client.post("/api/v1/auth/register", json={"email": "resume-headings@example.edu", "full_name": "Resume User", "password": "correct horse battery"})
     headers = {"Authorization": f"Bearer {register.json()['access_token']}"}
@@ -125,6 +259,25 @@ def test_resume_analysis_requires_configured_ai_key(client, monkeypatch):
                            files={"file": ("resume.txt", document, "text/plain")})
     assert response.status_code == 503
     assert "not configured" in response.json()["detail"]
+    assert client.get("/api/v1/resumes/latest", headers=headers).json() == {"analysis": None}
+
+
+def test_resume_analysis_rejects_oversized_extracted_text_without_ai_call(client, monkeypatch):
+    register = client.post("/api/v1/auth/register", json={
+        "email": "resume-too-large@example.edu",
+        "full_name": "Resume User",
+        "password": "correct horse battery",
+    })
+    headers = {"Authorization": f"Bearer {register.json()['access_token']}"}
+    monkeypatch.setattr(resumes_api.settings, "gemini_api_key", "configured-test-key")
+    monkeypatch.setattr(resumes_api, "analyze_resume_text", lambda *_args: (_ for _ in ()).throw(AssertionError("AI must not receive oversized input")))
+    oversized = b"A" * (resumes_api.MAX_AI_RESUME_CHARACTERS + 1)
+
+    response = client.post("/api/v1/resumes/analyze", headers=headers,
+                           files={"file": ("resume.txt", oversized, "text/plain")})
+
+    assert response.status_code == 413
+    assert "extracted resume is too long" in response.json()["detail"]
     assert client.get("/api/v1/resumes/latest", headers=headers).json() == {"analysis": None}
 
 

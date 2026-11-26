@@ -33,8 +33,8 @@ def main() -> None:
     create.add_argument("--role", required=True, choices=("administrator", "placement_officer"))
     model_check = commands.add_parser("gemini-model-check", help="Read Gemini model metadata without generating content")
     model_check.add_argument("--model", default=None, help="Model name; defaults to GEMINI_MODEL")
-    model_check.add_argument("--service", choices=("chat", "placement", "resume"), default="chat",
-                             help="Which server-side Gemini key to check (chat, placement, or resume)")
+    model_check.add_argument("--service", choices=("chat", "resume"), default="chat",
+                             help="Which server-side Gemini key to check (chat or resume)")
     args = parser.parse_args()
     if args.command == "create-user":
         create_user(args.email, args.name, args.role)

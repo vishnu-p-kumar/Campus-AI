@@ -105,7 +105,9 @@ function stop(child) {
 async function main() {
   await ensurePortFree(8100);
   const webPort = await availablePort();
-  const webUrl = `http://localhost:${webPort}`;
+  // Keep frontend and API on the same loopback hostname. Mixing localhost and
+  // 127.0.0.1 makes the development refresh cookie cross-site (SameSite=Lax).
+  const webUrl = `http://127.0.0.1:${webPort}`;
   if (!uploadDirectory.startsWith(`${repository}${path.sep}`)) throw new Error("Refusing to clean uploads outside the project E2E directory.");
   if (!temporaryTsconfig.startsWith(`${frontend}${path.sep}`)) throw new Error("Refusing to create E2E TypeScript settings outside the frontend directory.");
   const tsconfigSource = fs.readFileSync(path.join(frontend, "tsconfig.json"), "utf8").replace(/^\uFEFF/, "");
@@ -117,9 +119,7 @@ async function main() {
     UPLOAD_DIRECTORY: uploadDirectory,
     CORS_ORIGINS: webUrl,
     GEMINI_API_KEY: "",
-    GEMINI_PLACEMENT_API_KEY: "",
     GEMINI_CHAT_API_KEY: "",
-    GEMINI_URL_CONTEXT_ENABLED: "true",
     QDRANT_URL: "",
     QDRANT_API_KEY: "",
     // Browser workflows make many legitimate refresh calls in one isolated run;
@@ -148,13 +148,13 @@ async function main() {
     ...env,
     NEXT_DIST_DIR: path.basename(nextOutputDirectory),
     NEXT_TSCONFIG_PATH: path.basename(temporaryTsconfig),
-    NEXT_PUBLIC_API_BASE_URL: "http://localhost:8100",
+    NEXT_PUBLIC_API_BASE_URL: "http://127.0.0.1:8100",
   });
   await Promise.all([waitFor("http://localhost:8100/health/ready", api, "API"), waitFor(webUrl, next, "Next.js")]);
 
   const tests = spawnSync(process.execPath, [path.join(frontend, "node_modules/@playwright/test/cli.js"), "test", ...process.argv.slice(2)], {
     cwd: frontend,
-    env: { ...process.env, E2E_WEB_URL: webUrl, E2E_API_BASE_URL: "http://localhost:8100", E2E_STAFF_EMAIL: staffEmail, E2E_STAFF_PASSWORD: staffPassword },
+    env: { ...process.env, E2E_WEB_URL: webUrl, E2E_API_BASE_URL: "http://127.0.0.1:8100", E2E_STAFF_EMAIL: staffEmail, E2E_STAFF_PASSWORD: staffPassword },
     stdio: "inherit",
     windowsHide: true,
   });

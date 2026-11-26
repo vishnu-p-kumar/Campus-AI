@@ -17,7 +17,7 @@ def student_dashboard(user: User = Depends(require_roles("student")), db: Sessio
     upcoming = db.scalars(select(PlacementDrive).options(joinedload(PlacementDrive.company).joinedload(Company.requirements).joinedload(CompanyRequirement.source_document)).where(
         PlacementDrive.status == "open", (PlacementDrive.application_deadline.is_(None)) | (PlacementDrive.application_deadline >= datetime.now(timezone.utc))
     ).order_by(PlacementDrive.drive_date).limit(8)).unique().all()
-    apps = db.scalars(select(Application).options(joinedload(Application.drive).joinedload(PlacementDrive.company)).where(Application.student_user_id == user.id).order_by(Application.applied_at.desc()).limit(8)).unique().all()
+    apps = db.scalars(select(Application).options(joinedload(Application.drive).joinedload(PlacementDrive.company)).where(Application.student_user_id == user.id).order_by(Application.applied_at.desc())).unique().all()
     fields = ["department", "branch", "graduation_year", "cgpa", "semester", "active_backlogs", "historical_backlogs", "technical_skills"]
     completed = sum(bool(getattr(profile, field)) if isinstance(getattr(profile, field), list) else getattr(profile, field) is not None for field in fields) if profile else 0
     eligible = []

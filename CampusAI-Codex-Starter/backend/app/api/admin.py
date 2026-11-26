@@ -153,7 +153,7 @@ def evaluation_runs(_: User = Depends(require_roles("placement_officer", "admini
 def applications(_: User = Depends(require_roles("placement_officer", "administrator")), db: Session = Depends(get_db)):
     rows = db.execute(select(Application, User, PlacementDrive, Company).join(User, User.id == Application.student_user_id).join(PlacementDrive, PlacementDrive.id == Application.drive_id).join(Company, Company.id == PlacementDrive.company_id).order_by(Application.applied_at.desc()).limit(500)).all()
     return [{"id": application.id, "student_user_id": student.id, "student_name": student.full_name, "student_email": student.email,
-             "drive_id": drive.id, "company_id": company.id, "company": company.name, "role": drive.role, "status": application.status, "applied_at": application.applied_at}
+             "drive_id": drive.id, "company_id": company.id, "company": company.name, "role": drive.role, "status": application.status, "applied_at": application.applied_at, "resume_filename": application.resume_filename}
             for application, student, drive, company in rows]
 
 

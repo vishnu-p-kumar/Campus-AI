@@ -21,7 +21,7 @@ def _create_client(api_key: str):
 
 def _generate_content(client, *, contents, config=None, require_json=False):
     response, _model = generate_content_with_fallback(
-        client, contents=contents, config=config, require_json=require_json, max_models=4, retry_503=False,
+        client, contents=contents, config=config, require_json=require_json, max_models=2, retry_transient_errors=False,
     )
     return response
 

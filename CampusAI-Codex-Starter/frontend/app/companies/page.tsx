@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { ChangeEvent, useEffect, useState } from "react";
 import { RequireAuth, useAuth } from "../lib/api";
 
 type Company = { id: number; name: string; industry: string | null; description: string | null; job_roles: string[] };
@@ -12,16 +12,23 @@ function CompaniesContent() {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [drives, setDrives] = useState<Drive[]>([]);
   const [checks, setChecks] = useState<Record<number, Eligibility>>({});
-  const [resumeState, setResumeState] = useState<"checking" | "ready" | "missing" | "error">("checking");
+  const [appliedDriveIds, setAppliedDriveIds] = useState<number[]>([]);
+  const [resumeFiles, setResumeFiles] = useState<Record<number, File>>({});
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [applyingDriveId, setApplyingDriveId] = useState<number | null>(null);
+
   useEffect(() => {
-    Promise.all([api<Company[]>("/api/v1/companies/"), api<Drive[]>("/api/v1/placement-drives/")])
-      .then(([companyRows, driveRows]) => { setCompanies(companyRows); setDrives(driveRows); })
+    Promise.all([
+      api<Company[]>("/api/v1/companies/"),
+      api<Drive[]>("/api/v1/placement-drives/"),
+      api<Array<{ drive_id: number }>>("/api/v1/students/me/applications"),
+    ])
+      .then(([companyRows, driveRows, applicationRows]) => {
+        setCompanies(companyRows); setDrives(driveRows);
+        setAppliedDriveIds(applicationRows.map((application) => application.drive_id));
+      })
       .catch((cause) => setError(cause instanceof Error ? cause.message : "Could not load placement data"));
-    api<{ id?: number; analysis?: { id: number } | null }>("/api/v1/resumes/latest")
-      .then((result) => setResumeState(result.id || result.analysis?.id ? "ready" : "missing"))
-      .catch(() => setResumeState("error"));
   }, [api]);
 
   async function check(companyId: number) {
@@ -29,14 +36,29 @@ function CompaniesContent() {
     try { setChecks({ ...checks, [companyId]: await api<Eligibility>(`/api/v1/companies/${companyId}/eligibility`) }); }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Eligibility check failed"); }
   }
-  async function apply(driveId: number) {
-    setError(""); setNotice("");
-    try { await api(`/api/v1/placement-drives/${driveId}/apply`, { method: "POST" }); setNotice("Application recorded. You can follow it from your dashboard."); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : "Application failed"); }
+
+  function selectResume(driveId: number, event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (file) setResumeFiles((current) => ({ ...current, [driveId]: file }));
+  }
+
+  async function apply(drive: Drive) {
+    const resume = resumeFiles[drive.id];
+    if (!resume) { setError("Choose a resume for this role before applying."); return; }
+    setError(""); setNotice(""); setApplyingDriveId(drive.id);
+    try {
+      const form = new FormData();
+      form.append("resume", resume);
+      await api(`/api/v1/placement-drives/${drive.id}/apply`, { method: "POST", body: form });
+      setAppliedDriveIds((current) => current.includes(drive.id) ? current : [...current, drive.id]);
+      setNotice(`Applied to ${drive.company_name} · ${drive.role} with ${resume.name}.`);
+      setResumeFiles((current) => { const next = { ...current }; delete next[drive.id]; return next; });
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Application failed"); }
+    finally { setApplyingDriveId(null); }
   }
 
   return <div className="stack-xl">
-    <div className="page-heading"><div><p className="eyebrow">PLACEMENT OPPORTUNITIES</p><h1>Companies & drives</h1><p className="muted">Eligibility is evaluated with published rules. Incomplete policy evidence goes to manual review.</p></div></div>
+    <div className="page-heading"><div><p className="eyebrow">PLACEMENT OPPORTUNITIES</p><h1>Companies & drives</h1><p className="muted">Published placement rules determine eligibility. Your resume is attached to each application and is not analyzed to calculate eligibility.</p></div></div>
     {error && <div className="notice notice-error" role="alert">{error}</div>}{notice && <div className="notice notice-success" role="status">{notice}</div>}
     <section className="company-grid">
       {companies.map((company) => {
@@ -56,12 +78,13 @@ function CompaniesContent() {
       })}
       {!companies.length && <div className="panel empty-state">No eligible companies are currently available for your student profile.</div>}
     </section>
-    {resumeState === "missing" && <div className="notice notice-info">Upload and analyze your resume before applying. <a href="/resumes">Upload resume</a>.</div>}
-    {resumeState === "error" && <div className="notice notice-info">Could not check your resume status. Reload this page before applying.</div>}
-    <section className="panel"><div className="section-heading"><div><p className="eyebrow">OPEN ROLES</p><h2>Placement drives</h2></div></div>
-      <div className="table-wrap"><table><thead><tr><th>Company</th><th>Role</th><th>Compensation</th><th>Deadline</th><th>Eligibility</th><th /></tr></thead><tbody>
-        {drives.map((drive) => <tr key={drive.id}><td><strong>{drive.company_name}</strong><small>{drive.title}</small></td><td>{drive.role}</td><td>{drive.package_lpa ? `${drive.package_lpa} LPA` : "Not listed"}</td><td>{drive.application_deadline ? new Date(drive.application_deadline).toLocaleDateString() : "Not listed"}</td><td>{checks[drive.company_id]?.decision.replaceAll("_", " ") || <button className="text-button" onClick={() => check(drive.company_id)}>Check</button>}</td><td><button className="button button-primary button-small" onClick={() => apply(drive.id)} disabled={drive.status !== "open" || resumeState !== "ready"}>Apply</button></td></tr>)}
-        {!drives.length && <tr><td colSpan={6} className="muted">No eligible placement drives are currently available for your profile.</td></tr>}
+    <section className="panel"><div className="section-heading"><div><p className="eyebrow">OPEN ROLES</p><h2>Placement drives</h2><p className="muted">Attach a PDF, DOCX, or TXT resume separately for each role. Eligibility comes from your saved academic profile and the published company criteria.</p></div></div>
+      <div className="table-wrap"><table><thead><tr><th>Company</th><th>Role</th><th>Compensation</th><th>Deadline</th><th>Eligibility</th><th>Resume for this role</th><th /></tr></thead><tbody>
+        {drives.map((drive) => {
+          const hasApplied = appliedDriveIds.includes(drive.id);
+          return <tr key={drive.id}><td><strong>{drive.company_name}</strong><small>{drive.title}</small></td><td>{drive.role}</td><td>{drive.package_lpa ? `${drive.package_lpa} LPA` : "Not listed"}</td><td>{drive.application_deadline ? new Date(drive.application_deadline).toLocaleDateString() : "Not listed"}</td><td>{checks[drive.company_id]?.decision.replaceAll("_", " ") || <button className="text-button" onClick={() => check(drive.company_id)}>Check</button>}</td><td>{hasApplied ? <span className="status-pill status-good">Resume submitted</span> : <label className="file-field">{resumeFiles[drive.id]?.name || "Choose resume"}<input aria-label={`Resume for ${drive.company_name} ${drive.role}`} type="file" accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" onChange={(event) => selectResume(drive.id, event)} /></label>}</td><td>{hasApplied ? <span className="status-pill status-good">Applied</span> : <button className="button button-primary button-small" onClick={() => apply(drive)} disabled={drive.status !== "open" || !resumeFiles[drive.id] || applyingDriveId === drive.id}>{applyingDriveId === drive.id ? "Applying…" : "Apply"}</button>}</td></tr>;
+        })}
+        {!drives.length && <tr><td colSpan={7} className="muted">No eligible placement drives are currently available for your profile.</td></tr>}
       </tbody></table></div>
     </section>
   </div>;
