@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: placement-query-bot-api
+    runtime: python
+    rootDir: placement-query-bot-deploy
+    buildCommand: python -m pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.10
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-120b
+      - key: JSONBIN_BIN_ID
+        sync: false
+      - key: JSONBIN_API_KEY
+        sync: false
+      - key: LOG_BIN_ID
+        sync: false

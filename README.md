@@ -5,7 +5,7 @@ This repository contains two related applications:
 1. **CampusAI** — a full-stack placement intelligence platform for students and placement teams.
 2. **Placement Query Bot** — the FastAPI backend that provides the original placement FAQ, SQL, and out-of-scope routing flow. CampusAI imports this backend from the adjacent `placement-query-bot-deploy/` directory, and it can also run as a standalone API.
 
-The projects are kept together because the CampusAI placement assistant uses the Placement Query Bot's routing and answer flow. CampusAI adds authenticated conversations and uses the same bot backend with approved administrator uploads, administrator-managed company information, and the signed-in candidate's notifications as additional knowledge sources.
+The projects are kept together because the CampusAI placement assistant uses the Placement Query Bot's routing and answer flow. Both projects are included directly in this repository. CampusAI adds authenticated conversations and uses the same bot backend with approved administrator uploads, administrator-managed company information, and the signed-in candidate's notifications as additional knowledge sources.
 
 This is a student learning project. It is not an official BNMIT service.
 
@@ -53,7 +53,7 @@ SQLite is used by default for local CampusAI development. PostgreSQL, Qdrant, Do
 
 ## Quick start
 
-Read [`run.md`](run.md) for full setup, configuration, and launch instructions. Clone with `git clone --recurse-submodules <repository-url>` so the Placement Query Bot directory is present. In short, install the CampusAI backend and bot dependencies into the same Python environment, copy the sample environment files, apply migrations, start FastAPI, then start the Next.js frontend. The integrated bot runs inside the CampusAI API process; its standalone API is optional.
+Read [`run.md`](run.md) for full setup, configuration, and launch instructions. Clone this repository normally; the CampusAI and Placement Query Bot files are both included. In short, install the CampusAI backend and bot dependencies into the same Python environment, copy the sample environment files, apply migrations, start FastAPI, then start the Next.js frontend. The integrated bot runs inside the CampusAI API process; its standalone API is optional.
 
 The integrated local URLs in [`run.md`](run.md) are:
 
