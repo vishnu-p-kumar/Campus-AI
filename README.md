@@ -53,13 +53,13 @@ SQLite is used by default for local CampusAI development. PostgreSQL, Qdrant, Do
 
 ## Quick start
 
-Read [`run.md`](run.md) for full setup, configuration, and launch instructions. In short, install the CampusAI backend and bot dependencies, copy the sample environment files, apply migrations, start FastAPI, then start the Next.js frontend. The bot's standalone API can be launched separately when needed.
+Read [`run.md`](run.md) for full setup, configuration, and launch instructions. Clone with `git clone --recurse-submodules <repository-url>` so the Placement Query Bot directory is present. In short, install the CampusAI backend and bot dependencies into the same Python environment, copy the sample environment files, apply migrations, start FastAPI, then start the Next.js frontend. The integrated bot runs inside the CampusAI API process; its standalone API is optional.
 
 The integrated local URLs in [`run.md`](run.md) are:
 
 - CampusAI frontend: `http://localhost:3101`
-- CampusAI API: `http://localhost:8102`
-- CampusAI API documentation: `http://localhost:8102/docs`
+- CampusAI API: `http://localhost:8103`
+- CampusAI API documentation: `http://localhost:8103/docs`
 - Standalone Placement Query Bot API (optional): `http://localhost:8000`
 
 ## Configuration and secrets

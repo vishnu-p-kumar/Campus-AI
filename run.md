@@ -12,14 +12,18 @@ Install:
 - Python 3.11
 - Node.js 20 or newer (npm is included)
 
-Clone the repository and enter its root directory:
+Clone the repository with its Placement Query Bot submodule, then enter the root directory:
 
 ```powershell
-git clone https://github.com/vishnu-p-kumar/Placement-Query.git
+git clone --recurse-submodules https://github.com/vishnu-p-kumar/Placement-Query.git
 Set-Location Placement-Query
 ```
 
-`Campus-AI` is an older URL for this same repository and redirects to `Placement-Query`.
+If you already cloned the repository without `--recurse-submodules`, fetch the bot directory with:
+
+```powershell
+git submodule update --init --recursive
+```
 
 ## 2. Create the backend environment
 
